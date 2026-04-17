@@ -120,6 +120,7 @@ Additional runtime smoke check that passed:
 
 - Auth and positions endpoints require `POSTGRES_URL` and `AUTH_SECRET`; without them those flows cannot run end-to-end
 - Database config now also accepts Vercel Storage-style prefixed variables such as `zhuan_POSTGRES_URL` or `zhuan_DATABASE_URL`
+- `drizzle.config.ts` now also reads `.env.local`, so `vercel env pull .env.local` can be used directly before `npm run db:push`
 - Local API development should now use `vercel dev`, because the frontend actively calls `/api/*`
 - No automated end-to-end coverage exists yet for auth and position persistence
 - Quote refresh depends on a public third-party interface and does not guarantee long-term SLA
