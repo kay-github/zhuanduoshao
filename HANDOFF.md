@@ -13,6 +13,8 @@ Current state:
 - Frontend is wired to quotes/auth/positions APIs
 - Auth and positions flows depend on real environment variables and database availability
 - Runtime hardening has been added for Vercel Functions deployment
+- Runtime database access now uses `pg + drizzle-orm/node-postgres` for Vercel Postgres compatibility
+- Production register/login/session/position persistence path has been smoke-tested successfully
 
 ## What Is Already Done
 
@@ -110,11 +112,13 @@ Commands that passed:
 - `npm run build`
 - `npm run typecheck:server`
 - `npm run db:generate`
+- `npm run db:push -- --force`
 
 Additional runtime smoke check that passed:
 - `npx tsx -e "import { listQuotes } from './lib/server/quote-service.ts'; (async () => { const quotes = await listQuotes(); console.log(JSON.stringify(quotes, null, 2)); })();"`
 - `npm run build`
 - `npm run typecheck:server`
+- Production smoke test passed for `POST /api/auth/register`, `GET /api/auth/me`, `PUT /api/positions`, `GET /api/positions`
 
 ## Current Constraints And Gaps
 
@@ -124,7 +128,7 @@ Additional runtime smoke check that passed:
 - Local API development should now use `vercel dev`, because the frontend actively calls `/api/*`
 - No automated end-to-end coverage exists yet for auth and position persistence
 - Quote refresh depends on a public third-party interface and does not guarantee long-term SLA
-- The deployed Vercel site previously returned `FUNCTION_INVOCATION_FAILED` for API routes and should be rechecked after the latest runtime-hardening patch is deployed
+- The project currently relies on a manually linked Vercel project in `.vercel/`, which remains gitignored and should not be committed
 
 ## Environment Variables Needed Later
 

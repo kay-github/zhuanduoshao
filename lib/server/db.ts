@@ -1,10 +1,11 @@
-import { neon } from '@neondatabase/serverless'
-import { drizzle } from 'drizzle-orm/neon-http'
+import { drizzle } from 'drizzle-orm/node-postgres'
+import { Pool, type PoolConfig } from 'pg'
 
 import { ConfigurationError } from './errors.js'
 import * as schema from './schema.js'
 
 let dbInstance: ReturnType<typeof drizzle<typeof schema>> | null = null
+let poolInstance: Pool | null = null
 
 function readEnvValue(name: string) {
   const value = process.env[name]
@@ -45,7 +46,14 @@ export function getDb() {
     return dbInstance
   }
 
-  const client = neon(getDatabaseUrl())
-  dbInstance = drizzle({ client, schema })
+  poolInstance ??= new Pool(getPoolConfig())
+  dbInstance = drizzle({ client: poolInstance, schema })
   return dbInstance
+}
+
+function getPoolConfig(): PoolConfig {
+  return {
+    connectionString: getDatabaseUrl(),
+    max: 1,
+  }
 }
