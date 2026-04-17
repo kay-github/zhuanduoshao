@@ -119,6 +119,7 @@ Additional runtime smoke check that passed:
 ## Current Constraints And Gaps
 
 - Auth and positions endpoints require `POSTGRES_URL` and `AUTH_SECRET`; without them those flows cannot run end-to-end
+- Database config now also accepts Vercel Storage-style prefixed variables such as `zhuan_POSTGRES_URL` or `zhuan_DATABASE_URL`
 - Local API development should now use `vercel dev`, because the frontend actively calls `/api/*`
 - No automated end-to-end coverage exists yet for auth and position persistence
 - Quote refresh depends on a public third-party interface and does not guarantee long-term SLA
