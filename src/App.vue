@@ -28,9 +28,16 @@ interface PositionPayload {
   costPrice: number
 }
 
+interface PersistedAppState {
+  selectedCode?: string
+  customMarketCap?: string
+  positionDrafts?: Partial<Record<StockCode, Partial<PositionDraft>>>
+}
+
 type AuthMode = 'login' | 'register'
 
 const presetMarketCaps = [10_000, 12_000, 13_000, 15_000, 18_000, 20_000]
+const LOCAL_STATE_KEY = 'zhuanduoshao_app_state_v1'
 const defaultPosition = {
   quantity: 2000,
   costPrice: 84.5,
@@ -45,6 +52,7 @@ const quotesPending = ref(false)
 const quotesError = ref('')
 const positionsPending = ref(false)
 const positionSavePending = ref(false)
+const saveAllPending = ref(false)
 const positionMessage = ref('')
 const positionError = ref('')
 const authPending = ref(false)
@@ -58,6 +66,8 @@ const authForm = reactive({
 
 const quoteMap = reactive(createQuoteMap())
 const positionDrafts = reactive(createPositionDrafts())
+
+let localStateReady = false
 
 const stockOptions = computed(() => STOCKS.map((stock) => quoteMap[stock.code]))
 const activeStock = computed(() => quoteMap[selectedCode.value])
@@ -141,9 +151,24 @@ const positionStatusText = computed(() => {
 watch(selectedCode, () => {
   positionMessage.value = ''
   positionError.value = ''
+  persistLocalState()
 })
 
+watch(customMarketCap, () => {
+  persistLocalState()
+})
+
+watch(
+  positionDrafts,
+  () => {
+    persistLocalState()
+  },
+  { deep: true },
+)
+
 onMounted(() => {
+  restoreLocalState()
+  localStateReady = true
   void loadQuotes()
   void restoreSession()
 })
@@ -196,6 +221,76 @@ function switchAuthMode(mode: AuthMode) {
 function clearPositionFeedback() {
   positionMessage.value = ''
   positionError.value = ''
+}
+
+function normalizeDraftValue(value: unknown, fallbackValue: number) {
+  const numericValue = typeof value === 'number' ? value : Number(value)
+
+  if (!Number.isFinite(numericValue) || numericValue < 0) {
+    return fallbackValue
+  }
+
+  return numericValue
+}
+
+function restoreLocalState() {
+  const rawState = window.localStorage.getItem(LOCAL_STATE_KEY)
+
+  if (!rawState) {
+    return
+  }
+
+  try {
+    const parsedState = JSON.parse(rawState) as PersistedAppState
+
+    if (typeof parsedState.selectedCode === 'string' && isStockCode(parsedState.selectedCode)) {
+      selectedCode.value = parsedState.selectedCode
+    }
+
+    if (typeof parsedState.customMarketCap === 'string') {
+      customMarketCap.value = parsedState.customMarketCap
+    }
+
+    if (parsedState.positionDrafts) {
+      for (const stock of STOCKS) {
+        const savedDraft = parsedState.positionDrafts[stock.code]
+
+        if (!savedDraft) {
+          continue
+        }
+
+        positionDrafts[stock.code] = {
+          quantity: Math.trunc(normalizeDraftValue(savedDraft.quantity, defaultPosition.quantity)),
+          costPrice: normalizeDraftValue(savedDraft.costPrice, defaultPosition.costPrice),
+        }
+      }
+    }
+  } catch {
+    window.localStorage.removeItem(LOCAL_STATE_KEY)
+  }
+}
+
+function persistLocalState() {
+  if (!localStateReady) {
+    return
+  }
+
+  const nextState: PersistedAppState = {
+    selectedCode: selectedCode.value,
+    customMarketCap: customMarketCap.value,
+    positionDrafts: STOCKS.reduce(
+      (all, stock) => {
+        all[stock.code] = {
+          quantity: positionDrafts[stock.code].quantity,
+          costPrice: positionDrafts[stock.code].costPrice,
+        }
+        return all
+      },
+      {} as Partial<Record<StockCode, Partial<PositionDraft>>>,
+    ),
+  }
+
+  window.localStorage.setItem(LOCAL_STATE_KEY, JSON.stringify(nextState))
 }
 
 function normalizeQuote(payload: QuotePayload) {
@@ -274,6 +369,7 @@ async function restoreSession() {
 
     if (response.status === 401) {
       user.value = null
+      authError.value = ''
       return
     }
 
@@ -282,9 +378,11 @@ async function restoreSession() {
     }
 
     user.value = payload.user
+    authError.value = ''
     await loadPositions()
-  } catch {
+  } catch (error) {
     user.value = null
+    authError.value = readUnknownError(error, '登录状态恢复失败')
   }
 }
 
@@ -414,36 +512,63 @@ async function saveActivePosition() {
   positionError.value = ''
 
   try {
-    const response = await fetch('/api/positions', {
-      method: 'PUT',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-      },
-      credentials: 'same-origin',
-      body: JSON.stringify({
-        stockCode: selectedCode.value,
-        quantity: activePosition.value.quantity,
-        costPrice: activePosition.value.costPrice,
-      }),
-    })
-
-    const payload = await readJsonResponse(response)
-
-    if (response.status === 401) {
-      user.value = null
-      throw new Error('登录状态已失效，请重新登录')
-    }
-
-    if (!response.ok) {
-      throw new Error(readApiError(payload, '持仓保存失败'))
-    }
+    await savePosition(selectedCode.value)
 
     positionMessage.value = `${activeStock.value.name} 持仓已保存`
   } catch (error) {
     positionError.value = readUnknownError(error, '持仓保存失败')
   } finally {
     positionSavePending.value = false
+  }
+}
+
+async function saveAllPositions() {
+  if (!user.value) {
+    openAuth('login')
+    return
+  }
+
+  saveAllPending.value = true
+  positionError.value = ''
+
+  try {
+    for (const stock of STOCKS) {
+      await savePosition(stock.code)
+    }
+
+    positionMessage.value = '两只股票持仓已全部保存'
+  } catch (error) {
+    positionError.value = readUnknownError(error, '批量保存失败')
+  } finally {
+    saveAllPending.value = false
+  }
+}
+
+async function savePosition(stockCode: StockCode) {
+  const draft = positionDrafts[stockCode]
+  const response = await fetch('/api/positions', {
+    method: 'PUT',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    credentials: 'same-origin',
+    body: JSON.stringify({
+      stockCode,
+      quantity: draft.quantity,
+      costPrice: draft.costPrice,
+    }),
+  })
+
+  const payload = await readJsonResponse(response)
+
+  if (response.status === 401) {
+    user.value = null
+    throw new Error('登录状态已失效，请重新登录')
+  }
+
+  if (!response.ok) {
+    throw new Error(readApiError(payload, '持仓保存失败'))
   }
 }
 
@@ -661,10 +786,20 @@ function profitClass(value: number) {
             v-if="user"
             class="primary-button"
             type="button"
-            :disabled="positionsPending || positionSavePending"
+            :disabled="positionsPending || positionSavePending || saveAllPending"
             @click="saveActivePosition"
           >
             {{ positionSavePending ? '保存中...' : `保存 ${activeStock.name} 持仓` }}
+          </button>
+
+          <button
+            v-if="user"
+            class="ghost-button"
+            type="button"
+            :disabled="positionsPending || positionSavePending || saveAllPending"
+            @click="saveAllPositions"
+          >
+            {{ saveAllPending ? '批量保存中...' : '保存全部持仓' }}
           </button>
 
           <button v-else class="ghost-button" type="button" @click="openAuth('login')">登录后保存</button>
@@ -782,7 +917,7 @@ function profitClass(value: number) {
           </article>
           <article class="note-item">
             <strong>账号</strong>
-            <p>已接入用户名注册登录与持仓保存；本地联调接口时建议使用 vercel dev。</p>
+            <p>已接入轻量用户名体系；未登录输入会保存在当前浏览器，登录后可同步到账号下。</p>
           </article>
         </div>
       </section>

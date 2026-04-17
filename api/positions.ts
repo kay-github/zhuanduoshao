@@ -2,11 +2,11 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { asc, eq } from 'drizzle-orm'
 import { z } from 'zod'
 
-import { readSession } from '../lib/server/auth'
-import { db } from '../lib/server/db'
-import { json, methodNotAllowed, readJsonBody } from '../lib/server/http'
-import { positions } from '../lib/server/schema'
-import { isStockCode } from '../shared/stocks'
+import { readSession } from '../lib/server/auth.js'
+import { getDb } from '../lib/server/db.js'
+import { json, methodNotAllowed, readJsonBody, handleApiError } from '../lib/server/http.js'
+import { positions } from '../lib/server/schema.js'
+import { isStockCode } from '../shared/stocks.js'
 
 const savePositionSchema = z.object({
   stockCode: z.string(),
@@ -33,69 +33,75 @@ function serializePosition(position: {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const session = await readSession(req)
+  try {
+    const session = await readSession(req)
 
-  if (!session) {
-    return json(res, 401, { error: '请先登录' })
-  }
-
-  if (req.method === 'GET') {
-    const savedPositions = await db
-      .select({
-        id: positions.id,
-        userId: positions.userId,
-        stockCode: positions.stockCode,
-        quantity: positions.quantity,
-        costPrice: positions.costPrice,
-        updatedAt: positions.updatedAt,
-      })
-      .from(positions)
-      .where(eq(positions.userId, session.userId))
-      .orderBy(asc(positions.stockCode))
-
-    return json(res, 200, {
-      positions: savedPositions.map(serializePosition),
-    })
-  }
-
-  if (req.method === 'PUT') {
-    const parsedBody = savePositionSchema.safeParse(readJsonBody(req))
-
-    if (!parsedBody.success || !isStockCode(parsedBody.data.stockCode)) {
-      return json(res, 400, { error: '持仓数据不合法' })
+    if (!session) {
+      return json(res, 401, { error: '请先登录' })
     }
 
-    const now = new Date()
-    const [savedPosition] = await db
-      .insert(positions)
-      .values({
-        userId: session.userId,
-        stockCode: parsedBody.data.stockCode,
-        quantity: String(parsedBody.data.quantity),
-        costPrice: String(parsedBody.data.costPrice),
-        updatedAt: now,
+    const db = getDb()
+
+    if (req.method === 'GET') {
+      const savedPositions = await db
+        .select({
+          id: positions.id,
+          userId: positions.userId,
+          stockCode: positions.stockCode,
+          quantity: positions.quantity,
+          costPrice: positions.costPrice,
+          updatedAt: positions.updatedAt,
+        })
+        .from(positions)
+        .where(eq(positions.userId, session.userId))
+        .orderBy(asc(positions.stockCode))
+
+      return json(res, 200, {
+        positions: savedPositions.map(serializePosition),
       })
-      .onConflictDoUpdate({
-        target: [positions.userId, positions.stockCode],
-        set: {
+    }
+
+    if (req.method === 'PUT') {
+      const parsedBody = savePositionSchema.safeParse(readJsonBody(req))
+
+      if (!parsedBody.success || !isStockCode(parsedBody.data.stockCode)) {
+        return json(res, 400, { error: '持仓数据不合法' })
+      }
+
+      const now = new Date()
+      const [savedPosition] = await db
+        .insert(positions)
+        .values({
+          userId: session.userId,
+          stockCode: parsedBody.data.stockCode,
           quantity: String(parsedBody.data.quantity),
           costPrice: String(parsedBody.data.costPrice),
           updatedAt: now,
-        },
-      })
-      .returning({
-        id: positions.id,
-        userId: positions.userId,
-        stockCode: positions.stockCode,
-        quantity: positions.quantity,
-        costPrice: positions.costPrice,
-        updatedAt: positions.updatedAt,
-      })
+        })
+        .onConflictDoUpdate({
+          target: [positions.userId, positions.stockCode],
+          set: {
+            quantity: String(parsedBody.data.quantity),
+            costPrice: String(parsedBody.data.costPrice),
+            updatedAt: now,
+          },
+        })
+        .returning({
+          id: positions.id,
+          userId: positions.userId,
+          stockCode: positions.stockCode,
+          quantity: positions.quantity,
+          costPrice: positions.costPrice,
+          updatedAt: positions.updatedAt,
+        })
 
-    return json(res, 200, {
-      position: serializePosition(savedPosition),
-    })
+      return json(res, 200, {
+        position: serializePosition(savedPosition),
+      })
+    }
+
+    return methodNotAllowed(res, ['GET', 'PUT'])
+  } catch (error) {
+    return handleApiError(res, error)
   }
-
-  return methodNotAllowed(res, ['GET', 'PUT'])
 }

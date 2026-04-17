@@ -1,12 +1,25 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 
+import { isConfigurationError } from './errors.js'
+
 export function json(res: VercelResponse, status: number, body: unknown) {
-  return res.status(status).json(body)
+  res.statusCode = status
+  res.setHeader('Content-Type', 'application/json; charset=utf-8')
+  return res.end(JSON.stringify(body))
 }
 
 export function methodNotAllowed(res: VercelResponse, allowedMethods: string[]) {
   res.setHeader('Allow', allowedMethods.join(', '))
-  return json(res, 405, { error: 'Method not allowed' })
+  return json(res, 405, { error: '请求方法不支持' })
+}
+
+export function handleApiError(res: VercelResponse, error: unknown) {
+  if (isConfigurationError(error)) {
+    return json(res, 503, { error: error.message })
+  }
+
+  console.error(error)
+  return json(res, 500, { error: '服务暂时不可用' })
 }
 
 export function readJsonBody<T>(req: VercelRequest) {

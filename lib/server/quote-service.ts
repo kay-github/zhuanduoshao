@@ -1,7 +1,13 @@
-import { STOCKS, getFallbackQuote, listFallbackQuotes, type StockCode, type StockQuote } from '../../shared/stocks'
+import { STOCKS, getFallbackQuote, listFallbackQuotes, type StockCode, type StockQuote } from '../../shared/stocks.js'
 
 const QUOTE_API_URL = 'https://push2.eastmoney.com/api/qt/ulist.np/get'
 const QUOTE_FIELDS = 'f2,f3,f12,f20,f124'
+const QUOTE_CACHE_TTL_MS = 15_000
+const QUOTE_TIMEOUT_MS = 5_000
+
+let cachedQuotes: StockQuote[] | null = null
+let cacheExpiresAt = 0
+let pendingQuotesRequest: Promise<StockQuote[]> | null = null
 
 interface EastmoneyQuoteRow {
   f2?: number
@@ -22,15 +28,16 @@ function formatUpdatedAt(timestampSeconds: number | undefined, fallbackValue: st
     return fallbackValue
   }
 
-  const formatter = new Intl.DateTimeFormat('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-    timeZone: 'Asia/Shanghai',
-  })
+  const chinaTime = new Date(timestampSeconds * 1000 + 8 * 60 * 60 * 1000)
+  const hours = String(chinaTime.getUTCHours()).padStart(2, '0')
+  const minutes = String(chinaTime.getUTCMinutes()).padStart(2, '0')
+  const seconds = String(chinaTime.getUTCSeconds()).padStart(2, '0')
 
-  return formatter.format(new Date(timestampSeconds * 1000))
+  return `${hours}:${minutes}:${seconds}`
+}
+
+function cloneQuotes(quotes: StockQuote[]) {
+  return quotes.map((quote) => ({ ...quote }))
 }
 
 function mapProviderQuote(row: EastmoneyQuoteRow): StockQuote | null {
@@ -64,34 +71,60 @@ async function fetchQuotesFromProvider() {
   url.searchParams.set('fields', QUOTE_FIELDS)
   url.searchParams.set('secids', STOCKS.map((stock) => stock.secid).join(','))
 
-  const response = await fetch(url, {
-    headers: {
-      Accept: 'application/json',
-    },
-  })
+  const abortController = new AbortController()
+  const timeout = setTimeout(() => abortController.abort(), QUOTE_TIMEOUT_MS)
 
-  if (!response.ok) {
-    throw new Error(`quote provider request failed: ${response.status}`)
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+      },
+      signal: abortController.signal,
+    })
+
+    if (!response.ok) {
+      throw new Error(`quote provider request failed: ${response.status}`)
+    }
+
+    const payload = (await response.json()) as EastmoneyQuoteResponse
+
+    return payload.data?.diff ?? []
+  } finally {
+    clearTimeout(timeout)
   }
+}
 
-  const payload = (await response.json()) as EastmoneyQuoteResponse
+async function fetchFreshQuotes() {
+  const providerQuotes = await fetchQuotesFromProvider()
+  const quotesByCode = new Map(
+    providerQuotes
+      .map((quote) => mapProviderQuote(quote))
+      .filter((quote): quote is StockQuote => quote !== null)
+      .map((quote) => [quote.code, quote]),
+  )
 
-  return payload.data?.diff ?? []
+  const nextQuotes = STOCKS.map((stock) => quotesByCode.get(stock.code) ?? getFallbackQuote(stock.code))
+  cachedQuotes = cloneQuotes(nextQuotes)
+  cacheExpiresAt = Date.now() + QUOTE_CACHE_TTL_MS
+  return nextQuotes
 }
 
 export async function listQuotes() {
-  try {
-    const providerQuotes = await fetchQuotesFromProvider()
-    const quotesByCode = new Map(
-      providerQuotes
-        .map((quote) => mapProviderQuote(quote))
-        .filter((quote): quote is StockQuote => quote !== null)
-        .map((quote) => [quote.code, quote]),
-    )
+  if (cachedQuotes && Date.now() < cacheExpiresAt) {
+    return cloneQuotes(cachedQuotes)
+  }
 
-    return STOCKS.map((stock) => quotesByCode.get(stock.code) ?? getFallbackQuote(stock.code))
+  if (pendingQuotesRequest) {
+    return cloneQuotes(await pendingQuotesRequest)
+  }
+
+  try {
+    pendingQuotesRequest = fetchFreshQuotes()
+    return cloneQuotes(await pendingQuotesRequest)
   } catch {
     return listFallbackQuotes()
+  } finally {
+    pendingQuotesRequest = null
   }
 }
 

@@ -11,7 +11,8 @@ Current state:
 - Backend foundation has been added for `Vercel Functions + PostgreSQL + Drizzle`
 - Real public quote integration is connected behind `lib/server/quote-service.ts`
 - Frontend is wired to quotes/auth/positions APIs
-- Auth and positions flows now depend on real environment variables and database availability
+- Auth and positions flows depend on real environment variables and database availability
+- Runtime hardening has been added for Vercel Functions deployment
 
 ## What Is Already Done
 
@@ -31,6 +32,8 @@ Current state:
 - Frontend supports inline login/register in the header
 - Frontend loads saved positions from `/api/positions`
 - Logged-in users can save the current stock position with `PUT /api/positions`
+- Logged-in users can save both fixed-stock positions in one action
+- Unauthenticated position drafts, selected stock, and custom target market cap are persisted in browser local storage
 
 ### Calculation Logic In UI
 
@@ -70,6 +73,14 @@ Default target market caps:
 
 - `lib/server/quote-service.ts` now fetches real quotes from the Eastmoney public quote API
 - The quote service falls back to built-in demo quote data if the public request fails
+- Quote fetches use a short timeout and in-memory cache to reduce repeated third-party calls
+
+### Runtime Hardening
+
+- Server-side local imports were switched to explicit `.js` specifiers for more reliable Vercel ESM runtime resolution
+- API responses now use plain `res.end()` JSON output instead of framework helper chaining
+- API handlers now catch unexpected runtime/config errors and return JSON error payloads instead of generic crashes
+- Database initialization is lazy so quote-only endpoints do not fail just because DB env vars are missing
 
 ### Auth Design Implemented
 
@@ -102,6 +113,8 @@ Commands that passed:
 
 Additional runtime smoke check that passed:
 - `npx tsx -e "import { listQuotes } from './lib/server/quote-service.ts'; (async () => { const quotes = await listQuotes(); console.log(JSON.stringify(quotes, null, 2)); })();"`
+- `npm run build`
+- `npm run typecheck:server`
 
 ## Current Constraints And Gaps
 
@@ -109,6 +122,7 @@ Additional runtime smoke check that passed:
 - Local API development should now use `vercel dev`, because the frontend actively calls `/api/*`
 - No automated end-to-end coverage exists yet for auth and position persistence
 - Quote refresh depends on a public third-party interface and does not guarantee long-term SLA
+- The deployed Vercel site previously returned `FUNCTION_INVOCATION_FAILED` for API routes and should be rechecked after the latest runtime-hardening patch is deployed
 
 ## Environment Variables Needed Later
 
@@ -162,6 +176,7 @@ Database files:
 
 ### Priority 2
 
+- Recheck deployed `/api/quotes` and `/api/auth/me` after the latest patch is deployed
 - Run end-to-end verification through `vercel dev`
 - Register a user
 - Log in and out

@@ -41,6 +41,7 @@ Confirmed decisions:
 - Different accounts must only see their own holdings
 - Each user stores one current position per stock in MVP
 - Use HttpOnly cookie session in MVP
+- Unauthenticated users may keep temporary position drafts in local browser storage
 
 Out of scope for MVP unless explicitly added:
 - Complex profile system

@@ -2,7 +2,8 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import bcrypt from 'bcryptjs'
 import { SignJWT, jwtVerify } from 'jose'
 
-import { parseCookies } from './http'
+import { ConfigurationError } from './errors.js'
+import { parseCookies } from './http.js'
 
 const SESSION_COOKIE_NAME = 'zhuanduoshao_session'
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
@@ -14,7 +15,7 @@ interface SessionUser {
 
 function getAuthSecret() {
   if (!process.env.AUTH_SECRET) {
-    throw new Error('AUTH_SECRET is required')
+    throw new ConfigurationError('服务端尚未配置 AUTH_SECRET')
   }
 
   return new TextEncoder().encode(process.env.AUTH_SECRET)
@@ -60,8 +61,10 @@ export async function readSession(req: VercelRequest) {
     return null
   }
 
+  const authSecret = getAuthSecret()
+
   try {
-    const { payload } = await jwtVerify(token, getAuthSecret())
+    const { payload } = await jwtVerify(token, authSecret)
 
     if (typeof payload.sub !== 'string' || typeof payload.username !== 'string') {
       return null
