@@ -7,7 +7,7 @@ Last updated: 2026-07-09
 - Corporate-action automation for existing holdings is implemented end-to-end in the codebase: provider service, `/api/dividends`, persisted snapshots, `basisDate` on positions, frontend loading, and UI-side adjusted profit/projection calculations.
 - Provider strategy is settled for MVP: prefer Tushare Pro when `TUSHARE_TOKEN` is configured, fall back to Eastmoney public `RPT_SHAREBONUS_DET`, treat malformed/empty provider payloads as source failures, then reuse the latest `dividend_snapshots`, then fall back to empty corporate-action records.
 - Quote strategy is also hardened: Eastmoney + Tencent + Sina public quote providers, persisted `quote_snapshots`, and built-in fallback quote data only as the final fallback.
-- Mobile UI has been refined for the quote cards and market-cap scenarios: quote title is now shorter, quote cards align heights, latest price follows gain/loss color, market cap display switches between `亿` and `万亿`, and scenario cards use a less crowded mobile layout.
+- Mobile UI has been refined for the quote cards and market-cap scenarios: quote title is now shorter, quote cards are single-column, latest price follows gain/loss color, market cap display switches between `亿` and `万亿`, target input uses `万亿`, scenario cards use a less crowded mobile layout, and each scenario shows distance from current price.
 - Calculation rule now treats `quantity * costPrice` as original cost; applies implemented cash dividend, bonus share, and transfer records where `exDate > basisDate` and `exDate <= today`; adjusts effective quantity by share ratios; adds cash dividends to total return; excludes rights issues by default because they require user subscription/payment.
 - Latest verification passed: `npm run typecheck:server`, `npm run build`, `git diff --check`, live `listDividends()` and live `listQuotes()` smoke tests.
 - Live dividend smoke details: `300502` returned 10 records, latest implemented action was `2026-06-11` with `10转4股派10.00元`; `300308` returned 18 records, with the latest pre-disclosure lacking `exDate`, so it is not applied.
@@ -42,10 +42,11 @@ Current state:
 - Product name corrected to `赚多少`
 - Stock area shows the 2 fixed stocks directly instead of a dropdown
 - Current selected stock can be switched by clicking stock cards
-- Market-cap input remains in `亿元`; display now switches automatically between `亿元` and `万亿元`
+- Target market-cap input uses `万亿元`; display now switches automatically between `亿元` and `万亿元`
 - Quote card title is shortened to `行情`, and the old top-left stock kicker was removed
+- Quote cards now stack one per row instead of two side by side
 - Latest price and gain/loss percentage now both use gain/loss color
-- Mobile scenario cards were redesigned to emphasize target market cap, target price, total return rate, holding value, and total return without crowding the card
+- Mobile scenario cards were redesigned to emphasize target market cap, target price, distance from current price, total return rate, holding value, and total return without crowding the card
 - Quote update time is shown once in the stock section header
 - Explanatory copy was reduced and moved to a bottom notes card
 - Frontend now loads quotes from `/api/quotes`
@@ -163,6 +164,7 @@ Additional runtime smoke check that passed:
 - Latest dividend smoke check returned live Eastmoney records for both fixed stocks
 - 2026-07-09 verification passed: `npm run typecheck:server`, `npm run build`, `git diff --check`, live `listQuotes()` smoke test, and mobile browser visual check at 390px width
 - 2026-07-09 quote smoke returned live Tencent data for both fixed stocks; Eastmoney failed locally, so Sina was added as an extra backup provider while keeping Eastmoney in the provider chain
+- 2026-07-09 follow-up verification passed: `npm run typecheck:server`, `npm run build`, `git diff --check`, live `listQuotes()` smoke test, and 390px mobile browser checks for stacked quote cards, stock switching, `万亿` target input, custom target auto-inclusion, and `距离现价`.
 
 ## Current Constraints And Gaps
 

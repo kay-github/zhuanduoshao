@@ -75,7 +75,7 @@ Current valuation basis:
 - Use `total market cap`, not float market cap
 
 Current UI display/input unit:
-- Market cap input uses `亿元`; market cap display switches automatically between `亿元` and `万亿元`
+- Target market cap input uses `万亿元`; market cap display switches automatically between `亿元` and `万亿元`
 
 Current position:
 - each position stores `quantity`, `costPrice`, and `basisDate`

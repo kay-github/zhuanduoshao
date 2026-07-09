@@ -108,6 +108,34 @@ const positionDrafts = reactive(createPositionDrafts())
 
 let localStateReady = false
 
+const customMarketCapWanYi = computed({
+  get() {
+    const customValue = Number(customMarketCap.value)
+
+    if (!Number.isFinite(customValue) || customValue <= 0) {
+      return ''
+    }
+
+    return formatPlainNumber(customValue / 10_000, 4)
+  },
+  set(value: string | number) {
+    const rawValue = String(value).trim()
+
+    if (!rawValue) {
+      customMarketCap.value = ''
+      return
+    }
+
+    const numericValue = Number(rawValue)
+
+    if (!Number.isFinite(numericValue) || numericValue < 0) {
+      return
+    }
+
+    customMarketCap.value = formatPlainNumber(numericValue * 10_000, 2)
+  },
+})
+
 const stockOptions = computed(() => STOCKS.map((stock) => quoteMap[stock.code]))
 const activeStock = computed(() => quoteMap[selectedCode.value])
 const activeDividend = computed(() => dividendMap[selectedCode.value])
@@ -149,6 +177,7 @@ const scenarioRows = computed(() =>
     const totalProfit = targetValue + adjustedPosition.value.cashDividendAmount - costAmount.value
     const additionalProfit = targetValue - currentValue.value
     const totalProfitPct = costAmount.value > 0 ? totalProfit / costAmount.value : 0
+    const distancePct = activeStock.value.latestPrice > 0 ? targetPrice / activeStock.value.latestPrice - 1 : 0
 
     return {
       targetLabel: formatYiUnit(target),
@@ -157,6 +186,7 @@ const scenarioRows = computed(() =>
       totalProfit,
       additionalProfit,
       totalProfitPct,
+      distancePct,
     }
   }),
 )
@@ -264,6 +294,7 @@ watch(selectedCode, () => {
 })
 
 watch(customMarketCap, () => {
+  ensureCustomTargetSelected()
   persistLocalState()
 })
 
@@ -279,13 +310,11 @@ watch(
     const previousCustomTarget = previousTargets?.find((target) => !presetMarketCaps.includes(target))
     const nextCustomTarget = nextTargets.find((target) => !presetMarketCaps.includes(target))
 
-    if (
-      previousCustomTarget &&
-      nextCustomTarget &&
-      previousCustomTarget !== nextCustomTarget &&
-      selectedScenarioTargets.value.includes(previousCustomTarget) &&
-      !nextSelectedTargets.includes(nextCustomTarget)
-    ) {
+    if (nextCustomTarget && previousCustomTarget && previousCustomTarget !== nextCustomTarget) {
+      nextSelectedTargets = nextSelectedTargets.filter((target) => target !== previousCustomTarget)
+    }
+
+    if (nextCustomTarget && !nextSelectedTargets.includes(nextCustomTarget)) {
       nextSelectedTargets = [...nextSelectedTargets, nextCustomTarget]
     }
 
@@ -398,6 +427,21 @@ function toggleScenarioTarget(target: number) {
   selectedScenarioTargets.value = [...selectedScenarioTargets.value, target].sort((a, b) => a - b)
 }
 
+function readCustomTargetMarketCap() {
+  const customValue = Number(customMarketCap.value)
+  return Number.isFinite(customValue) && customValue > 0 ? customValue : null
+}
+
+function ensureCustomTargetSelected() {
+  const customValue = readCustomTargetMarketCap()
+
+  if (!customValue || selectedScenarioTargets.value.includes(customValue)) {
+    return
+  }
+
+  selectedScenarioTargets.value = [...selectedScenarioTargets.value, customValue].sort((a, b) => a - b)
+}
+
 function todayDateValue() {
   const now = new Date()
   const localDate = new Date(now.getTime() - now.getTimezoneOffset() * 60_000)
@@ -474,6 +518,8 @@ function restoreLocalState() {
         }
       }
     }
+
+    ensureCustomTargetSelected()
   } catch {
     window.localStorage.removeItem(LOCAL_STATE_KEY)
   }
@@ -913,6 +959,14 @@ function formatShareQuantity(value: number) {
   }).format(value)
 }
 
+function formatPlainNumber(value: number, maximumFractionDigits: number) {
+  return new Intl.NumberFormat('zh-CN', {
+    useGrouping: false,
+    minimumFractionDigits: 0,
+    maximumFractionDigits,
+  }).format(value)
+}
+
 function formatYiFromYuan(value: number) {
   return formatYiUnit(value / 100_000_000)
 }
@@ -1176,8 +1230,8 @@ function profitClass(value: number) {
             <label>
               <span>自定义目标市值</span>
               <div class="input-suffix">
-                <input v-model="customMarketCap" type="number" min="0" step="100" />
-                <em>亿</em>
+                <input v-model="customMarketCapWanYi" type="number" min="0" step="0.1" />
+                <em>万亿</em>
               </div>
             </label>
           </div>
@@ -1221,8 +1275,8 @@ function profitClass(value: number) {
             <label class="scenario-custom-input">
               <span>自定义目标</span>
               <div class="input-suffix scenario-input-suffix">
-                <input v-model="customMarketCap" type="number" min="0" step="100" />
-                <em>亿</em>
+                <input v-model="customMarketCapWanYi" type="number" min="0" step="0.1" />
+                <em>万亿</em>
               </div>
             </label>
           </div>
@@ -1259,12 +1313,16 @@ function profitClass(value: number) {
                 <strong :class="profitClass(row.additionalProfit)">{{ formatCurrency(row.targetPrice) }}</strong>
               </article>
               <article>
-                <span>总收益率</span>
-                <strong :class="profitClass(row.totalProfit)">{{ formatPercent(row.totalProfitPct) }}</strong>
+                <span>距离现价</span>
+                <strong :class="profitClass(row.distancePct)">{{ formatPercent(row.distancePct) }}</strong>
               </article>
             </div>
 
             <div class="scenario-mobile-grid">
+              <article>
+                <span>总收益率</span>
+                <strong :class="profitClass(row.totalProfit)">{{ formatPercent(row.totalProfitPct) }}</strong>
+              </article>
               <article>
                 <span>持仓市值</span>
                 <strong>{{ formatCurrency(row.targetValue) }}</strong>
@@ -1283,6 +1341,7 @@ function profitClass(value: number) {
               <tr>
                 <th>目标总市值</th>
                 <th>对应股价</th>
+                <th>距离现价</th>
                 <th>持仓市值</th>
                 <th>相对成本总收益</th>
                 <th>总收益率</th>
@@ -1293,6 +1352,7 @@ function profitClass(value: number) {
               <tr v-for="row in scenarioRows" :key="row.targetLabel">
                 <td>{{ row.targetLabel }}</td>
                 <td>{{ formatCurrency(row.targetPrice) }}</td>
+                <td :class="profitClass(row.distancePct)">{{ formatPercent(row.distancePct) }}</td>
                 <td>{{ formatCurrency(row.targetValue) }}</td>
                 <td :class="profitClass(row.totalProfit)">{{ formatCurrency(row.totalProfit) }}</td>
                 <td :class="profitClass(row.totalProfit)">{{ formatPercent(row.totalProfitPct) }}</td>
@@ -1314,11 +1374,11 @@ function profitClass(value: number) {
         <div class="notes-list">
           <article class="note-item">
             <strong>行情</strong>
-            <p>默认并行使用东方财富与腾讯行情；实时源异常时优先回退到最近成功缓存，最后才退内置值。</p>
+            <p>默认并行使用东方财富、腾讯和新浪行情；实时源异常时优先回退到最近成功缓存，最后才退内置值。</p>
           </article>
           <article class="note-item">
             <strong>口径</strong>
-            <p>市值输入仍按亿元，展示会在亿元和万亿元之间自动切换，未来推演按总市值计算。</p>
+            <p>目标市值输入使用万亿元，展示会在亿元和万亿元之间自动切换，未来推演按总市值计算。</p>
           </article>
           <article class="note-item">
             <strong>账号</strong>
