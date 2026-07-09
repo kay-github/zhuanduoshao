@@ -12,6 +12,7 @@ const savePositionSchema = z.object({
   stockCode: z.string(),
   quantity: z.coerce.number().int().min(0),
   costPrice: z.coerce.number().min(0),
+  basisDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 })
 
 function serializePosition(position: {
@@ -20,6 +21,7 @@ function serializePosition(position: {
   stockCode: string
   quantity: string
   costPrice: string
+  basisDate: string | null
   updatedAt: Date
 }) {
   return {
@@ -28,6 +30,7 @@ function serializePosition(position: {
     stockCode: position.stockCode,
     quantity: Number(position.quantity),
     costPrice: Number(position.costPrice),
+    basisDate: position.basisDate ?? position.updatedAt.toISOString().slice(0, 10),
     updatedAt: position.updatedAt.toISOString(),
   }
 }
@@ -50,6 +53,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           stockCode: positions.stockCode,
           quantity: positions.quantity,
           costPrice: positions.costPrice,
+          basisDate: positions.basisDate,
           updatedAt: positions.updatedAt,
         })
         .from(positions)
@@ -76,6 +80,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           stockCode: parsedBody.data.stockCode,
           quantity: String(parsedBody.data.quantity),
           costPrice: String(parsedBody.data.costPrice),
+          basisDate: parsedBody.data.basisDate ?? now.toISOString().slice(0, 10),
           updatedAt: now,
         })
         .onConflictDoUpdate({
@@ -83,6 +88,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           set: {
             quantity: String(parsedBody.data.quantity),
             costPrice: String(parsedBody.data.costPrice),
+            basisDate: parsedBody.data.basisDate ?? now.toISOString().slice(0, 10),
             updatedAt: now,
           },
         })
@@ -92,6 +98,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           stockCode: positions.stockCode,
           quantity: positions.quantity,
           costPrice: positions.costPrice,
+          basisDate: positions.basisDate,
           updatedAt: positions.updatedAt,
         })
 

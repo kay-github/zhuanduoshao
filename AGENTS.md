@@ -54,12 +54,16 @@ Out of scope for MVP unless explicitly added:
 Confirmed decisions:
 - Use public market data interface in MVP
 - Data source should be wrapped behind a project-side quote service interface so it can be replaced later
-- Current MVP quote provider: Eastmoney public quote API via `lib/server/quote-service.ts`
+- Current MVP quote providers: Eastmoney, Tencent, and Sina public quote APIs via `lib/server/quote-service.ts`
+- Quote service now uses multiple public providers and should prefer persisted last-good data over hardcoded fallback data when live sources fail
+- Corporate action data is wrapped behind `lib/server/dividend-service.ts`; it prefers `TUSHARE_TOKEN`/Tushare Pro when configured, then falls back to Eastmoney public dividend/bonus data
+- Corporate action snapshots should be persisted and reused before falling back to empty action data
 
 Target data fields:
 - latest price
 - total market cap
 - updated time
+- dividend/bonus/transfer records with record date and ex-dividend/ex-rights date
 
 Important note:
 - Free public APIs may be usable for MVP, but they do not guarantee exchange-grade SLA or long-term stability.
@@ -71,22 +75,27 @@ Current valuation basis:
 - Use `total market cap`, not float market cap
 
 Current UI display/input unit:
-- Use `亿元` for market cap display and target market cap input in MVP UI
+- Market cap input uses `亿元`; market cap display switches automatically between `亿元` and `万亿元`
 
 Current position:
-- cost amount = `quantity * costPrice`
-- current holding value = `quantity * latestPrice`
-- current profit = `current holding value - cost amount`
-- current profit rate = `current profit / cost amount`
+- each position stores `quantity`, `costPrice`, and `basisDate`
+- original cost amount = `quantity * costPrice`
+- automatically apply implemented cash dividends, bonus shares, and capital reserve transfers with `exDate > basisDate` and `exDate <= today`
+- effective quantity is adjusted by bonus/transfer ratios
+- cash dividend amount is added to total return
+- current holding value = `effective quantity * latestPrice`
+- current profit = `current holding value + cash dividend amount - original cost amount`
+- current profit rate = `current profit / original cost amount`
 
 Future scenario projection:
 - target price = `latestPrice * targetMarketCap / currentTotalMarketCap`
-- target holding value = `quantity * targetPrice`
-- total future profit = `target holding value - cost amount`
+- target holding value = `effective quantity * targetPrice`
+- total future profit = `target holding value + cash dividend amount - original cost amount`
 - additional profit from now = `target holding value - current holding value`
 
 Assumption:
-- Share count remains unchanged during projection.
+- Projection assumes no future unannounced corporate actions beyond already implemented records.
+- Rights issues are not automatically assumed as subscribed because they require user action/payment.
 
 ## Default Scenario Targets
 

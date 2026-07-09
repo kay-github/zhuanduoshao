@@ -5,6 +5,7 @@ import { STOCKS, getFallbackQuote, isStockCode, type StockCode, type StockQuote 
 interface PositionDraft {
   quantity: number
   costPrice: number
+  basisDate: string
 }
 
 interface UserSummary {
@@ -26,21 +27,50 @@ interface PositionPayload {
   stockCode: string
   quantity: number
   costPrice: number
+  basisDate?: string
+  updatedAt?: string
 }
+
+interface DividendRecordPayload {
+  reportDate: string
+  totalRatio: number | null
+  sendRatio: number | null
+  transferRatio: number | null
+  cashDividendRatio: number | null
+  cashDividendDescription: string
+  dividendYield: number | null
+  recordDate: string
+  exDate: string
+  planProgress: string
+  latestAnnouncementDate: string
+}
+
+interface DividendPayload {
+  code: string
+  name: string
+  label: string
+  records: DividendRecordPayload[]
+}
+
+type QuoteFreshness = 'live' | 'snapshot' | 'fallback'
+type DividendFreshness = 'live' | 'partial' | 'cached' | 'fallback'
 
 interface PersistedAppState {
   selectedCode?: string
   customMarketCap?: string
+  selectedScenarioTargets?: number[]
   positionDrafts?: Partial<Record<StockCode, Partial<PositionDraft>>>
 }
 
 type AuthMode = 'login' | 'register'
 
 const presetMarketCaps = [10_000, 12_000, 13_000, 15_000, 18_000, 20_000]
+const defaultSelectedScenarioTargets = [12_000, 15_000, 20_000]
 const LOCAL_STATE_KEY = 'zhuanduoshao_app_state_v1'
 const defaultPosition = {
   quantity: 2000,
   costPrice: 84.5,
+  basisDate: todayDateValue(),
 }
 
 const selectedCode = ref<StockCode>('300502')
@@ -50,9 +80,17 @@ const authDialogOpen = ref(false)
 const user = ref<UserSummary | null>(null)
 const quotesPending = ref(false)
 const quotesError = ref('')
+const quoteFreshness = ref<QuoteFreshness>('fallback')
+const quoteSource = ref('')
+const dividendsPending = ref(false)
+const dividendsError = ref('')
+const dividendFreshness = ref<DividendFreshness>('fallback')
+const dividendSource = ref('')
 const positionsPending = ref(false)
 const positionSavePending = ref(false)
 const saveAllPending = ref(false)
+const positionEditorOpen = ref(false)
+const selectedScenarioTargets = ref<number[]>([...defaultSelectedScenarioTargets])
 const positionMessage = ref('')
 const positionError = ref('')
 const authPending = ref(false)
@@ -65,18 +103,21 @@ const authForm = reactive({
 })
 
 const quoteMap = reactive(createQuoteMap())
+const dividendMap = reactive(createDividendMap())
 const positionDrafts = reactive(createPositionDrafts())
 
 let localStateReady = false
 
 const stockOptions = computed(() => STOCKS.map((stock) => quoteMap[stock.code]))
 const activeStock = computed(() => quoteMap[selectedCode.value])
+const activeDividend = computed(() => dividendMap[selectedCode.value])
 const activePosition = computed(() => positionDrafts[selectedCode.value])
 const quoteUpdatedAt = computed(() => activeStock.value.updatedAt)
+const adjustedPosition = computed(() => adjustPositionForCorporateActions(activePosition.value, activeDividend.value.records))
 
-const costAmount = computed(() => activePosition.value.quantity * activePosition.value.costPrice)
-const currentValue = computed(() => activePosition.value.quantity * activeStock.value.latestPrice)
-const currentProfit = computed(() => currentValue.value - costAmount.value)
+const costAmount = computed(() => adjustedPosition.value.originalCostAmount)
+const currentValue = computed(() => adjustedPosition.value.quantity * activeStock.value.latestPrice)
+const currentProfit = computed(() => currentValue.value + adjustedPosition.value.cashDividendAmount - costAmount.value)
 const currentProfitPct = computed(() =>
   costAmount.value > 0 ? currentProfit.value / costAmount.value : 0,
 )
@@ -92,16 +133,20 @@ const targetMarketCaps = computed(() => {
   return [...new Set(values)].sort((a, b) => a - b)
 })
 
+const visibleTargetMarketCaps = computed(() =>
+  targetMarketCaps.value.filter((target) => selectedScenarioTargets.value.includes(target)),
+)
+
 const scenarioRows = computed(() =>
-  targetMarketCaps.value.map((target) => {
+  visibleTargetMarketCaps.value.map((target) => {
     const targetCap = target * 100_000_000
     const targetPrice =
       activeStock.value.totalMarketCap > 0
         ? activeStock.value.latestPrice * (targetCap / activeStock.value.totalMarketCap)
         : 0
 
-    const targetValue = activePosition.value.quantity * targetPrice
-    const totalProfit = targetValue - costAmount.value
+    const targetValue = adjustedPosition.value.quantity * targetPrice
+    const totalProfit = targetValue + adjustedPosition.value.cashDividendAmount - costAmount.value
     const additionalProfit = targetValue - currentValue.value
     const totalProfitPct = costAmount.value > 0 ? totalProfit / costAmount.value : 0
 
@@ -118,14 +163,48 @@ const scenarioRows = computed(() =>
 
 const quoteStatusText = computed(() => {
   if (quotesPending.value) {
-    return '正在刷新公共行情'
+    return '正在刷新多源行情'
   }
 
   if (quotesError.value) {
     return quotesError.value
   }
 
-  return '已接入公共行情接口'
+  if (quoteFreshness.value === 'live') {
+    return quoteSource.value ? `实时多源行情 · ${quoteSource.value}` : '实时多源行情已接通'
+  }
+
+  if (quoteFreshness.value === 'snapshot') {
+    return quoteSource.value
+      ? `实时源短暂波动，当前展示最近成功缓存 · ${quoteSource.value}`
+      : '实时源短暂波动，当前展示最近成功缓存'
+  }
+
+  return '实时源与缓存都不可用，当前展示内置回退数据'
+})
+
+const dividendStatusText = computed(() => {
+  if (dividendsPending.value) {
+    return '正在同步分红送转数据'
+  }
+
+  if (dividendsError.value) {
+    return dividendsError.value
+  }
+
+  if (dividendFreshness.value === 'live') {
+    return dividendSource.value ? `公司行动已同步 · ${dividendSource.value}` : '公司行动已同步'
+  }
+
+  if (dividendFreshness.value === 'partial') {
+    return dividendSource.value ? `部分公司行动来自缓存 · ${dividendSource.value}` : '部分公司行动来自缓存'
+  }
+
+  if (dividendFreshness.value === 'cached') {
+    return dividendSource.value ? `当前使用公司行动缓存 · ${dividendSource.value}` : '当前使用公司行动缓存'
+  }
+
+  return '公司行动暂未同步，当前按原始持仓估算'
 })
 
 const positionStatusText = computed(() => {
@@ -148,6 +227,36 @@ const positionStatusText = computed(() => {
   return '未登录时仅在当前页面暂存输入'
 })
 
+const customTargetSummary = computed(() => {
+  const customValue = Number(customMarketCap.value)
+
+  if (!Number.isFinite(customValue) || customValue <= 0) {
+    return '未设置'
+  }
+
+  return formatYiUnit(customValue)
+})
+
+const positionSummaryText = computed(
+  () =>
+    `当前按 ${activePosition.value.quantity} 股、成本 ${formatCurrency(activePosition.value.costPrice)}、自定义目标 ${customTargetSummary.value} 推演`,
+)
+
+const positionAutoSummaryText = computed(
+  () =>
+    `${positionSummaryText.value}；基准日 ${activePosition.value.basisDate}，送转后按 ${formatShareQuantity(adjustedPosition.value.quantity)} 股推演`,
+)
+
+const corporateActionSummaryText = computed(() => {
+  if (adjustedPosition.value.appliedActions.length === 0) {
+    return '暂无需要自动应用的已实施分红送转'
+  }
+
+  return `${adjustedPosition.value.appliedActions.length} 次已实施分红送转，累计现金 ${formatCurrency(
+    adjustedPosition.value.cashDividendAmount,
+  )}`
+})
+
 watch(selectedCode, () => {
   positionMessage.value = ''
   positionError.value = ''
@@ -157,6 +266,37 @@ watch(selectedCode, () => {
 watch(customMarketCap, () => {
   persistLocalState()
 })
+
+watch(selectedScenarioTargets, () => {
+  persistLocalState()
+})
+
+watch(
+  targetMarketCaps,
+  (nextTargets, previousTargets) => {
+    const nextTargetSet = new Set(nextTargets)
+    let nextSelectedTargets = selectedScenarioTargets.value.filter((target) => nextTargetSet.has(target))
+    const previousCustomTarget = previousTargets?.find((target) => !presetMarketCaps.includes(target))
+    const nextCustomTarget = nextTargets.find((target) => !presetMarketCaps.includes(target))
+
+    if (
+      previousCustomTarget &&
+      nextCustomTarget &&
+      previousCustomTarget !== nextCustomTarget &&
+      selectedScenarioTargets.value.includes(previousCustomTarget) &&
+      !nextSelectedTargets.includes(nextCustomTarget)
+    ) {
+      nextSelectedTargets = [...nextSelectedTargets, nextCustomTarget]
+    }
+
+    if (nextSelectedTargets.length === 0) {
+      nextSelectedTargets = nextTargets.slice(0, Math.min(3, nextTargets.length))
+    }
+
+    selectedScenarioTargets.value = [...new Set(nextSelectedTargets)].sort((a, b) => a - b)
+  },
+  { immediate: true },
+)
 
 watch(
   positionDrafts,
@@ -170,6 +310,7 @@ onMounted(() => {
   restoreLocalState()
   localStateReady = true
   void loadQuotes()
+  void loadDividends()
   void restoreSession()
 })
 
@@ -180,6 +321,21 @@ function createQuoteMap() {
       return all
     },
     {} as Record<StockCode, StockQuote>,
+  )
+}
+
+function createDividendMap() {
+  return STOCKS.reduce(
+    (all, stock) => {
+      all[stock.code] = {
+        code: stock.code,
+        name: stock.name,
+        label: stock.label,
+        records: [],
+      }
+      return all
+    },
+    {} as Record<StockCode, DividendPayload>,
   )
 }
 
@@ -195,7 +351,7 @@ function createPositionDrafts() {
 
 function resetPositionDrafts() {
   for (const stock of STOCKS) {
-    positionDrafts[stock.code] = { ...defaultPosition }
+    positionDrafts[stock.code] = { ...defaultPosition, basisDate: todayDateValue() }
   }
 }
 
@@ -223,6 +379,47 @@ function clearPositionFeedback() {
   positionError.value = ''
 }
 
+function togglePositionEditor() {
+  positionEditorOpen.value = !positionEditorOpen.value
+}
+
+function toggleScenarioTarget(target: number) {
+  const isSelected = selectedScenarioTargets.value.includes(target)
+
+  if (isSelected) {
+    if (selectedScenarioTargets.value.length === 1) {
+      return
+    }
+
+    selectedScenarioTargets.value = selectedScenarioTargets.value.filter((item) => item !== target)
+    return
+  }
+
+  selectedScenarioTargets.value = [...selectedScenarioTargets.value, target].sort((a, b) => a - b)
+}
+
+function todayDateValue() {
+  const now = new Date()
+  const localDate = new Date(now.getTime() - now.getTimezoneOffset() * 60_000)
+  return localDate.toISOString().slice(0, 10)
+}
+
+function normalizeDateValue(value: unknown, fallbackValue = todayDateValue()) {
+  if (typeof value !== 'string') {
+    return fallbackValue
+  }
+
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : fallbackValue
+}
+
+function dateFromIsoValue(value: unknown, fallbackValue = todayDateValue()) {
+  if (typeof value !== 'string') {
+    return fallbackValue
+  }
+
+  return normalizeDateValue(value.slice(0, 10), fallbackValue)
+}
+
 function normalizeDraftValue(value: unknown, fallbackValue: number) {
   const numericValue = typeof value === 'number' ? value : Number(value)
 
@@ -231,6 +428,11 @@ function normalizeDraftValue(value: unknown, fallbackValue: number) {
   }
 
   return numericValue
+}
+
+function roundCalculatedValue(value: number, precision = 6) {
+  const scale = 10 ** precision
+  return Math.round((value + Number.EPSILON) * scale) / scale
 }
 
 function restoreLocalState() {
@@ -251,6 +453,12 @@ function restoreLocalState() {
       customMarketCap.value = parsedState.customMarketCap
     }
 
+    if (Array.isArray(parsedState.selectedScenarioTargets)) {
+      selectedScenarioTargets.value = parsedState.selectedScenarioTargets.filter(
+        (target): target is number => Number.isFinite(target) && target > 0,
+      )
+    }
+
     if (parsedState.positionDrafts) {
       for (const stock of STOCKS) {
         const savedDraft = parsedState.positionDrafts[stock.code]
@@ -262,6 +470,7 @@ function restoreLocalState() {
         positionDrafts[stock.code] = {
           quantity: Math.trunc(normalizeDraftValue(savedDraft.quantity, defaultPosition.quantity)),
           costPrice: normalizeDraftValue(savedDraft.costPrice, defaultPosition.costPrice),
+          basisDate: normalizeDateValue(savedDraft.basisDate, defaultPosition.basisDate),
         }
       }
     }
@@ -278,11 +487,13 @@ function persistLocalState() {
   const nextState: PersistedAppState = {
     selectedCode: selectedCode.value,
     customMarketCap: customMarketCap.value,
+    selectedScenarioTargets: selectedScenarioTargets.value,
     positionDrafts: STOCKS.reduce(
       (all, stock) => {
         all[stock.code] = {
           quantity: positionDrafts[stock.code].quantity,
           costPrice: positionDrafts[stock.code].costPrice,
+          basisDate: positionDrafts[stock.code].basisDate,
         }
         return all
       },
@@ -307,6 +518,60 @@ function normalizeQuote(payload: QuotePayload) {
     priceChangePct: payload.priceChangePct,
     updatedAt: payload.updatedAt,
   } satisfies StockQuote
+}
+
+function normalizeDividend(payload: DividendPayload) {
+  if (!isStockCode(payload.code) || !Array.isArray(payload.records)) {
+    return null
+  }
+
+  return {
+    code: payload.code,
+    name: payload.name,
+    label: payload.label,
+    records: payload.records.filter((record) => record && typeof record.exDate === 'string'),
+  } satisfies DividendPayload
+}
+
+function adjustPositionForCorporateActions(position: PositionDraft, records: DividendRecordPayload[]) {
+  const today = todayDateValue()
+  const originalCostAmount = position.quantity * position.costPrice
+  let quantity = position.quantity
+  let cashDividendAmount = 0
+  const appliedActions: DividendRecordPayload[] = []
+
+  for (const record of [...records].sort((a, b) => a.exDate.localeCompare(b.exDate))) {
+    if (!record.exDate || record.exDate > today || record.exDate <= position.basisDate) {
+      continue
+    }
+
+    if (record.planProgress && !record.planProgress.includes('实施')) {
+      continue
+    }
+
+    const beforeQuantity = quantity
+    const shareRatio = ((record.sendRatio ?? 0) + (record.transferRatio ?? 0)) / 10
+    const cashRatio = (record.cashDividendRatio ?? 0) / 10
+
+    if (shareRatio <= 0 && cashRatio <= 0) {
+      continue
+    }
+
+    cashDividendAmount = roundCalculatedValue(cashDividendAmount + beforeQuantity * cashRatio)
+    quantity = roundCalculatedValue(beforeQuantity * (1 + shareRatio))
+    appliedActions.push(record)
+  }
+
+  const adjustedCostAmount = Math.max(originalCostAmount - cashDividendAmount, 0)
+
+  return {
+    quantity,
+    originalCostAmount,
+    cashDividendAmount,
+    adjustedCostAmount,
+    adjustedCostPrice: quantity > 0 ? adjustedCostAmount / quantity : 0,
+    appliedActions,
+  }
 }
 
 function readApiError(payload: unknown, fallbackMessage: string) {
@@ -336,11 +601,18 @@ async function loadQuotes() {
       },
     })
 
-    const payload = (await readJsonResponse(response)) as { quotes?: QuotePayload[] } | null
+    const payload = (await readJsonResponse(response)) as {
+      quotes?: QuotePayload[]
+      freshness?: QuoteFreshness
+      source?: string
+    } | null
 
     if (!response.ok) {
       throw new Error(readApiError(payload, '行情接口暂时不可用'))
     }
+
+    quoteFreshness.value = payload?.freshness ?? 'fallback'
+    quoteSource.value = typeof payload?.source === 'string' ? payload.source : ''
 
     for (const quote of payload?.quotes ?? []) {
       const normalizedQuote = normalizeQuote(quote)
@@ -350,9 +622,51 @@ async function loadQuotes() {
       }
     }
   } catch (error) {
-    quotesError.value = `${readUnknownError(error, '行情刷新失败')}，当前展示回退数据`
+    quoteFreshness.value = 'fallback'
+    quoteSource.value = ''
+    quotesError.value = `${readUnknownError(error, '行情刷新失败')}，当前展示本地已加载数据`
   } finally {
     quotesPending.value = false
+  }
+}
+
+async function loadDividends() {
+  dividendsPending.value = true
+  dividendsError.value = ''
+
+  try {
+    const response = await fetch('/api/dividends', {
+      headers: {
+        Accept: 'application/json',
+      },
+    })
+
+    const payload = (await readJsonResponse(response)) as {
+      dividends?: DividendPayload[]
+      freshness?: DividendFreshness
+      source?: string
+    } | null
+
+    if (!response.ok) {
+      throw new Error(readApiError(payload, '分红送转接口暂时不可用'))
+    }
+
+    dividendFreshness.value = payload?.freshness ?? 'fallback'
+    dividendSource.value = typeof payload?.source === 'string' ? payload.source : ''
+
+    for (const dividend of payload?.dividends ?? []) {
+      const normalizedDividend = normalizeDividend(dividend)
+
+      if (normalizedDividend) {
+        dividendMap[normalizedDividend.code] = normalizedDividend
+      }
+    }
+  } catch (error) {
+    dividendFreshness.value = 'fallback'
+    dividendSource.value = ''
+    dividendsError.value = `${readUnknownError(error, '分红送转同步失败')}，当前按原始持仓估算`
+  } finally {
+    dividendsPending.value = false
   }
 }
 
@@ -426,6 +740,7 @@ async function loadPositions() {
       positionDrafts[savedPosition.stockCode] = {
         quantity: savedPosition.quantity,
         costPrice: savedPosition.costPrice,
+        basisDate: normalizeDateValue(savedPosition.basisDate, dateFromIsoValue(savedPosition.updatedAt)),
       }
     }
 
@@ -515,6 +830,7 @@ async function saveActivePosition() {
     await savePosition(selectedCode.value)
 
     positionMessage.value = `${activeStock.value.name} 持仓已保存`
+    positionEditorOpen.value = false
   } catch (error) {
     positionError.value = readUnknownError(error, '持仓保存失败')
   } finally {
@@ -537,6 +853,7 @@ async function saveAllPositions() {
     }
 
     positionMessage.value = '两只股票持仓已全部保存'
+    positionEditorOpen.value = false
   } catch (error) {
     positionError.value = readUnknownError(error, '批量保存失败')
   } finally {
@@ -557,10 +874,11 @@ async function savePosition(stockCode: StockCode) {
       stockCode,
       quantity: draft.quantity,
       costPrice: draft.costPrice,
+      basisDate: draft.basisDate,
     }),
   })
 
-  const payload = await readJsonResponse(response)
+  const payload = (await readJsonResponse(response)) as { position?: PositionPayload } | null
 
   if (response.status === 401) {
     user.value = null
@@ -569,6 +887,13 @@ async function savePosition(stockCode: StockCode) {
 
   if (!response.ok) {
     throw new Error(readApiError(payload, '持仓保存失败'))
+  }
+  if (payload?.position && isStockCode(payload.position.stockCode)) {
+    positionDrafts[payload.position.stockCode] = {
+      quantity: payload.position.quantity,
+      costPrice: payload.position.costPrice,
+      basisDate: normalizeDateValue(payload.position.basisDate, dateFromIsoValue(payload.position.updatedAt)),
+    }
   }
 }
 
@@ -581,17 +906,30 @@ function formatCurrency(value: number, withUnit = true) {
   return withUnit ? `¥${result}` : result
 }
 
+function formatShareQuantity(value: number) {
+  return new Intl.NumberFormat('zh-CN', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(value)
+}
+
 function formatYiFromYuan(value: number) {
   return formatYiUnit(value / 100_000_000)
 }
 
+function formatMarketCapFromYuan(value: number) {
+  return formatYiFromYuan(value)
+}
+
 function formatYiUnit(value: number) {
-  const maximumFractionDigits = Number.isInteger(value) ? 0 : 1
+  const usesWanYi = value >= 10_000
+  const displayValue = usesWanYi ? value / 10_000 : value
+  const maximumFractionDigits = usesWanYi ? 2 : Number.isInteger(value) ? 0 : 1
 
   return `${new Intl.NumberFormat('zh-CN', {
     minimumFractionDigits: 0,
     maximumFractionDigits,
-  }).format(value)} 亿`
+  }).format(displayValue)}${usesWanYi ? '万亿' : '亿'}`
 }
 
 function formatPercent(value: number) {
@@ -618,19 +956,22 @@ function profitClass(value: number) {
       </div>
 
       <div class="topbar-side">
-        <div v-if="user" class="session-pill">账号 {{ user.username }}</div>
+        <template v-if="user">
+          <div class="topbar-account-row">
+            <div class="session-pill">
+              <span class="session-label">账号</span>
+              <strong>{{ user.username }}</strong>
+            </div>
 
-        <div class="topbar-buttons">
-          <template v-if="user">
-            <button class="ghost-button" type="button" :disabled="logoutPending" @click="logout">
+            <button class="text-button session-action" type="button" :disabled="logoutPending" @click="logout">
               {{ logoutPending ? '退出中...' : '退出' }}
             </button>
-          </template>
+          </div>
+        </template>
 
-          <template v-else>
-            <button class="ghost-button" type="button" @click="openAuth('login')">登录</button>
-            <button class="primary-button" type="button" @click="openAuth('register')">注册</button>
-          </template>
+        <div v-else class="topbar-buttons">
+          <button class="ghost-button" type="button" @click="openAuth('login')">登录</button>
+          <button class="primary-button" type="button" @click="openAuth('register')">注册</button>
         </div>
       </div>
 
@@ -683,8 +1024,7 @@ function profitClass(value: number) {
       <section class="hero-card panel">
         <div class="card-header stock-header">
           <div>
-            <p class="section-kicker">股票</p>
-            <h3>标的行情</h3>
+            <h3>行情</h3>
           </div>
 
           <div class="header-actions">
@@ -695,7 +1035,7 @@ function profitClass(value: number) {
           </div>
         </div>
 
-        <p :class="['status-text', { 'is-negative': quotesError }]">{{ quoteStatusText }}</p>
+        <p :class="['status-text', { 'is-negative': quotesError || quoteFreshness === 'fallback' }]">{{ quoteStatusText }}</p>
 
         <div class="stock-grid">
           <button
@@ -715,21 +1055,21 @@ function profitClass(value: number) {
               </span>
             </div>
 
-            <p class="stock-card-label">{{ stock.label }}</p>
-
             <div class="stock-card-metrics">
               <article>
                 <span>最新价</span>
-                <strong>{{ formatCurrency(stock.latestPrice) }}</strong>
+                <strong :class="['compact-number', profitClass(stock.priceChangePct)]">
+                  {{ formatCurrency(stock.latestPrice) }}
+                </strong>
               </article>
               <article>
                 <span>总市值</span>
-                <strong>{{ formatYiFromYuan(stock.totalMarketCap) }}</strong>
+                <strong class="compact-number">{{ formatMarketCapFromYuan(stock.totalMarketCap) }}</strong>
               </article>
             </div>
 
-            <div v-if="stock.code === selectedCode" class="stock-card-footer">
-              <span class="stock-card-state">当前</span>
+            <div class="stock-card-footer">
+              <span v-if="stock.code === selectedCode" class="stock-card-state">当前</span>
             </div>
           </button>
         </div>
@@ -738,8 +1078,8 @@ function profitClass(value: number) {
       <section class="panel position-card">
         <div class="card-header">
           <div>
-            <p class="section-kicker">持仓录入</p>
-            <h3>{{ activeStock.name }} 持仓</h3>
+            <p class="section-kicker">持仓数据</p>
+            <h3>{{ activeStock.name }} 概览</h3>
           </div>
           <div class="position-header-meta">
             <span class="header-note">{{ activeStock.code }}</span>
@@ -747,81 +1087,124 @@ function profitClass(value: number) {
           </div>
         </div>
 
-        <div class="form-grid">
-          <label>
-            <span>持仓数量</span>
-            <input
-              v-model.number="positionDrafts[selectedCode].quantity"
-              type="number"
-              min="0"
-              step="100"
-              @input="clearPositionFeedback"
-            />
-          </label>
-
-          <label>
-            <span>成本价</span>
-            <input
-              v-model.number="positionDrafts[selectedCode].costPrice"
-              type="number"
-              min="0"
-              step="0.01"
-              @input="clearPositionFeedback"
-            />
-          </label>
-
-          <label>
-            <span>自定义目标市值</span>
-            <div class="input-suffix">
-              <input v-model="customMarketCap" type="number" min="0" step="100" />
-              <em>亿</em>
-            </div>
-          </label>
-        </div>
-
-        <div class="form-actions">
-          <p :class="['status-text', { 'is-negative': positionError }]">{{ positionStatusText }}</p>
-
-          <button
-            v-if="user"
-            class="primary-button"
-            type="button"
-            :disabled="positionsPending || positionSavePending || saveAllPending"
-            @click="saveActivePosition"
-          >
-            {{ positionSavePending ? '保存中...' : `保存 ${activeStock.name} 持仓` }}
-          </button>
-
-          <button
-            v-if="user"
-            class="ghost-button"
-            type="button"
-            :disabled="positionsPending || positionSavePending || saveAllPending"
-            @click="saveAllPositions"
-          >
-            {{ saveAllPending ? '批量保存中...' : '保存全部持仓' }}
-          </button>
-
-          <button v-else class="ghost-button" type="button" @click="openAuth('login')">登录后保存</button>
-        </div>
-
-        <div class="metric-strip">
+        <div class="metric-strip position-metrics">
           <article>
             <span>成本总额</span>
-            <strong>{{ formatCurrency(costAmount) }}</strong>
+            <strong class="metric-number">{{ formatCurrency(costAmount) }}</strong>
           </article>
           <article>
             <span>当前市值</span>
-            <strong>{{ formatCurrency(currentValue) }}</strong>
+            <strong class="metric-number">{{ formatCurrency(currentValue) }}</strong>
+          </article>
+          <article>
+            <span>有效股数</span>
+            <strong class="metric-number">{{ formatShareQuantity(adjustedPosition.quantity) }}</strong>
+          </article>
+          <article>
+            <span>累计分红</span>
+            <strong class="metric-number">{{ formatCurrency(adjustedPosition.cashDividendAmount) }}</strong>
           </article>
           <article>
             <span>当前收益</span>
-            <strong :class="profitClass(currentProfit)">{{ formatCurrency(currentProfit) }}</strong>
+            <strong :class="['metric-number', profitClass(currentProfit)]">{{ formatCurrency(currentProfit) }}</strong>
           </article>
           <article>
             <span>当前收益率</span>
-            <strong :class="profitClass(currentProfit)">{{ formatPercent(currentProfitPct) }}</strong>
+            <strong :class="['metric-number', profitClass(currentProfit)]">{{ formatPercent(currentProfitPct) }}</strong>
           </article>
+        </div>
+
+        <div class="position-editor-summary">
+          <div class="position-editor-copy">
+            <p class="section-kicker">编辑入口</p>
+            <h4>{{ positionEditorOpen ? '正在编辑持仓参数' : '点击展开后录入或调整持仓' }}</h4>
+            <p class="status-text">{{ positionAutoSummaryText }}</p>
+          </div>
+
+          <button
+            class="ghost-button position-toggle-button"
+            type="button"
+            :aria-expanded="positionEditorOpen"
+            @click="togglePositionEditor"
+          >
+            {{ positionEditorOpen ? '收起持仓录入' : '录入 / 修改持仓' }}
+          </button>
+        </div>
+
+        <p :class="['status-text', 'position-status', { 'is-negative': positionError }]">{{ positionStatusText }}</p>
+
+        <div class="corporate-action-summary">
+          <p :class="['status-text', { 'is-negative': dividendsError || dividendFreshness === 'fallback' }]">
+            {{ dividendStatusText }}
+          </p>
+          <strong>{{ corporateActionSummaryText }}</strong>
+        </div>
+
+        <div v-if="positionEditorOpen" class="position-editor-panel">
+          <div class="form-grid">
+            <label>
+              <span>持仓数量</span>
+              <input
+                v-model.number="positionDrafts[selectedCode].quantity"
+                type="number"
+                min="0"
+                step="100"
+                @input="clearPositionFeedback"
+              />
+            </label>
+
+            <label>
+              <span>成本价</span>
+              <input
+                v-model.number="positionDrafts[selectedCode].costPrice"
+                type="number"
+                min="0"
+                step="0.01"
+                @input="clearPositionFeedback"
+              />
+            </label>
+
+            <label>
+              <span>持仓基准日</span>
+              <input
+                v-model="positionDrafts[selectedCode].basisDate"
+                type="date"
+                @input="clearPositionFeedback"
+              />
+            </label>
+
+            <label>
+              <span>自定义目标市值</span>
+              <div class="input-suffix">
+                <input v-model="customMarketCap" type="number" min="0" step="100" />
+                <em>亿</em>
+              </div>
+            </label>
+          </div>
+
+          <div class="form-actions">
+            <button
+              v-if="user"
+              class="primary-button"
+              type="button"
+              :disabled="positionsPending || positionSavePending || saveAllPending"
+              @click="saveActivePosition"
+            >
+              {{ positionSavePending ? '保存中...' : `保存 ${activeStock.name} 持仓` }}
+            </button>
+
+            <button
+              v-if="user"
+              class="ghost-button"
+              type="button"
+              :disabled="positionsPending || positionSavePending || saveAllPending"
+              @click="saveAllPositions"
+            >
+              {{ saveAllPending ? '批量保存中...' : '保存全部持仓' }}
+            </button>
+
+            <button v-else class="ghost-button" type="button" @click="openAuth('login')">登录后保存</button>
+          </div>
         </div>
       </section>
 
@@ -831,8 +1214,30 @@ function profitClass(value: number) {
             <p class="section-kicker">市值推演</p>
             <h3>{{ activeStock.name }}</h3>
           </div>
+        </div>
+
+        <div class="scenario-selector">
+          <div class="scenario-control-row">
+            <label class="scenario-custom-input">
+              <span>自定义目标</span>
+              <div class="input-suffix scenario-input-suffix">
+                <input v-model="customMarketCap" type="number" min="0" step="100" />
+                <em>亿</em>
+              </div>
+            </label>
+          </div>
+
           <div class="scenario-tags">
-            <span v-for="target in targetMarketCaps" :key="target">{{ formatYiUnit(target) }}</span>
+            <button
+              v-for="target in targetMarketCaps"
+              :key="target"
+              type="button"
+              :class="['scenario-tag-button', { 'is-active': selectedScenarioTargets.includes(target) }]"
+              :aria-pressed="selectedScenarioTargets.includes(target)"
+              @click="toggleScenarioTarget(target)"
+            >
+              {{ formatYiUnit(target) }}
+            </button>
           </div>
         </div>
 
@@ -840,6 +1245,7 @@ function profitClass(value: number) {
           <article v-for="row in scenarioRows" :key="`${row.targetLabel}-mobile`" class="scenario-mobile-card">
             <div class="scenario-mobile-header">
               <div>
+                <span>目标市值</span>
                 <strong>{{ row.targetLabel }}</strong>
               </div>
               <span :class="['scenario-mobile-chip', profitClass(row.additionalProfit)]">
@@ -847,26 +1253,25 @@ function profitClass(value: number) {
               </span>
             </div>
 
-            <div class="scenario-mobile-grid">
+            <div class="scenario-mobile-main">
               <article>
                 <span>对应股价</span>
-                <strong>{{ formatCurrency(row.targetPrice) }}</strong>
-              </article>
-              <article>
-                <span>持仓市值</span>
-                <strong>{{ formatCurrency(row.targetValue) }}</strong>
-              </article>
-              <article>
-                <span>相对成本总收益</span>
-                <strong :class="profitClass(row.totalProfit)">{{ formatCurrency(row.totalProfit) }}</strong>
+                <strong :class="profitClass(row.additionalProfit)">{{ formatCurrency(row.targetPrice) }}</strong>
               </article>
               <article>
                 <span>总收益率</span>
                 <strong :class="profitClass(row.totalProfit)">{{ formatPercent(row.totalProfitPct) }}</strong>
               </article>
+            </div>
+
+            <div class="scenario-mobile-grid">
               <article>
-                <span>新增收益</span>
-                <strong :class="profitClass(row.additionalProfit)">{{ formatCurrency(row.additionalProfit) }}</strong>
+                <span>持仓市值</span>
+                <strong>{{ formatCurrency(row.targetValue) }}</strong>
+              </article>
+              <article>
+                <span>总收益</span>
+                <strong :class="profitClass(row.totalProfit)">{{ formatCurrency(row.totalProfit) }}</strong>
               </article>
             </div>
           </article>
@@ -909,11 +1314,11 @@ function profitClass(value: number) {
         <div class="notes-list">
           <article class="note-item">
             <strong>行情</strong>
-            <p>默认调用东方财富公共行情接口，接口异常时会回退到内置示例数据。</p>
+            <p>默认并行使用东方财富与腾讯行情；实时源异常时优先回退到最近成功缓存，最后才退内置值。</p>
           </article>
           <article class="note-item">
             <strong>口径</strong>
-            <p>当前所有市值展示和输入统一使用亿元，未来推演按总市值计算。</p>
+            <p>市值输入仍按亿元，展示会在亿元和万亿元之间自动切换，未来推演按总市值计算。</p>
           </article>
           <article class="note-item">
             <strong>账号</strong>

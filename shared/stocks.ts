@@ -2,7 +2,7 @@ export const STOCKS = [
   {
     code: '300502',
     name: '新易盛',
-    label: 'AI 光模块龙头 / 创业板',
+    label: '',
     secid: '0.300502',
     fallbackQuote: {
       latestPrice: 118.36,
@@ -14,7 +14,7 @@ export const STOCKS = [
   {
     code: '300308',
     name: '中际旭创',
-    label: '800G/1.6T 核心标的 / 创业板',
+    label: '',
     secid: '0.300308',
     fallbackQuote: {
       latestPrice: 143.88,

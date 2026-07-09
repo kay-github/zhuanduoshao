@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 
-import { json, methodNotAllowed, handleApiError } from '../lib/server/http.js'
-import { getQuote, listQuotes } from '../lib/server/quote-service.js'
+import { getDividend, listDividends } from '../lib/server/dividend-service.js'
+import { handleApiError, json, methodNotAllowed } from '../lib/server/http.js'
 import { isStockCode } from '../shared/stocks.js'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -17,21 +17,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return json(res, 400, { error: '不支持的股票代码' })
       }
 
-      const quoteResult = await getQuote(code)
+      const dividendResult = await getDividend(code)
 
       return json(res, 200, {
-        quote: quoteResult.quote,
-        freshness: quoteResult.freshness,
-        source: quoteResult.source,
+        dividend: dividendResult.dividend,
+        freshness: dividendResult.freshness,
+        source: dividendResult.source,
       })
     }
 
-    const quoteFeed = await listQuotes()
+    const dividendFeed = await listDividends()
 
     return json(res, 200, {
-      quotes: quoteFeed.quotes,
-      freshness: quoteFeed.freshness,
-      source: quoteFeed.source,
+      dividends: dividendFeed.dividends,
+      freshness: dividendFeed.freshness,
+      source: dividendFeed.source,
     })
   } catch (error) {
     return handleApiError(res, error)
