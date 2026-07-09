@@ -67,8 +67,12 @@ type AuthMode = 'login' | 'register'
 const presetMarketCaps = [10_000, 12_000, 13_000, 15_000, 18_000, 20_000]
 const defaultSelectedScenarioTargets = [12_000, 15_000, 20_000]
 const LOCAL_STATE_KEY = 'zhuanduoshao_app_state_v1'
-const defaultPosition = {
+const legacyDefaultPosition = {
   quantity: 2000,
+  costPrice: 84.5,
+}
+const defaultPosition = {
+  quantity: 0,
   costPrice: 84.5,
   basisDate: todayDateValue(),
 }
@@ -474,6 +478,17 @@ function normalizeDraftValue(value: unknown, fallbackValue: number) {
   return numericValue
 }
 
+function restoreSavedQuantity(savedDraft: Partial<PositionDraft>) {
+  const savedQuantity = normalizeDraftValue(savedDraft.quantity, defaultPosition.quantity)
+  const savedCostPrice = normalizeDraftValue(savedDraft.costPrice, defaultPosition.costPrice)
+
+  if (savedQuantity === legacyDefaultPosition.quantity && savedCostPrice === legacyDefaultPosition.costPrice) {
+    return defaultPosition.quantity
+  }
+
+  return Math.trunc(savedQuantity)
+}
+
 function roundCalculatedValue(value: number, precision = 6) {
   const scale = 10 ** precision
   return Math.round((value + Number.EPSILON) * scale) / scale
@@ -512,7 +527,7 @@ function restoreLocalState() {
         }
 
         positionDrafts[stock.code] = {
-          quantity: Math.trunc(normalizeDraftValue(savedDraft.quantity, defaultPosition.quantity)),
+          quantity: restoreSavedQuantity(savedDraft),
           costPrice: normalizeDraftValue(savedDraft.costPrice, defaultPosition.costPrice),
           basisDate: normalizeDateValue(savedDraft.basisDate, defaultPosition.basisDate),
         }

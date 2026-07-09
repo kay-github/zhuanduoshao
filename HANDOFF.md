@@ -9,6 +9,7 @@ Last updated: 2026-07-09
 - Quote strategy is also hardened: Eastmoney + Tencent + Sina public quote providers, persisted `quote_snapshots`, and built-in fallback quote data only as the final fallback.
 - Mobile UI has been refined for the quote cards and market-cap scenarios: quote title is now shorter, quote cards are single-column, latest price follows gain/loss color, market cap display switches between `亿` and `万亿`, target input uses `万亿`, scenario cards use a less crowded mobile layout, and each scenario shows distance from current price.
 - Position save responses are hardened: `PUT /api/positions` no longer depends solely on Drizzle `.returning()` and tolerates string/Date timestamp values, avoiding a false "service unavailable" response after a successful write.
+- Default/new-user position quantity is now `0`; the frontend migrates the old implicit `2000` share demo default back to `0` when it appears in local browser drafts.
 - Calculation rule now treats `quantity * costPrice` as original cost; applies implemented cash dividend, bonus share, and transfer records where `exDate > basisDate` and `exDate <= today`; adjusts effective quantity by share ratios; adds cash dividends to total return; excludes rights issues by default because they require user subscription/payment.
 - Latest verification passed: `npm run typecheck:server`, `npm run build`, `git diff --check`, live `listDividends()` and live `listQuotes()` smoke tests.
 - Live dividend smoke details: `300502` returned 10 records, latest implemented action was `2026-06-11` with `10转4股派10.00元`; `300308` returned 18 records, with the latest pre-disclosure lacking `exDate`, so it is not applied.
@@ -59,6 +60,7 @@ Current state:
 - Logged-in users can save both fixed-stock positions in one action
 - `PUT /api/positions` falls back to a post-write lookup if the database driver does not return the saved row from `.returning()`
 - Position drafts now include `basisDate`, used as the starting date for automatic corporate-action adjustment
+- Default position drafts start with `0` shares; users must enter a quantity before the app treats them as holding shares
 - Unauthenticated position drafts, selected stock, and custom target market cap are persisted in browser local storage
 
 ### Calculation Logic In UI
@@ -168,6 +170,7 @@ Additional runtime smoke check that passed:
 - 2026-07-09 quote smoke returned live Tencent data for both fixed stocks; Eastmoney failed locally, so Sina was added as an extra backup provider while keeping Eastmoney in the provider chain
 - 2026-07-09 follow-up verification passed: `npm run typecheck:server`, `npm run build`, `git diff --check`, live `listQuotes()` smoke test, and 390px mobile browser checks for stacked quote cards, stock switching, `万亿` target input, custom target auto-inclusion, and `距离现价`.
 - 2026-07-09 position-save hardening verification passed: `npm run typecheck:server`, `npm run build`, `git diff --check`; read-only DB check confirmed local `updatedAt` currently returns as `Date`, while the API is now defensive for string timestamps and empty `.returning()` results.
+- 2026-07-09 default-position verification passed: `npm run typecheck:server`, `npm run build`, `git diff --check`; new drafts now start at `0` shares and old local demo defaults are migrated away.
 
 ## Current Constraints And Gaps
 
