@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { asc, eq } from 'drizzle-orm'
+import { and, asc, eq } from 'drizzle-orm'
 import { z } from 'zod'
 
 import { readSession } from '../lib/server/auth.js'
@@ -22,17 +22,28 @@ function serializePosition(position: {
   quantity: string
   costPrice: string
   basisDate: string | null
-  updatedAt: Date
+  updatedAt: Date | string
 }) {
+  const updatedAt = normalizeTimestamp(position.updatedAt)
+
   return {
     id: position.id,
     userId: position.userId,
     stockCode: position.stockCode,
     quantity: Number(position.quantity),
     costPrice: Number(position.costPrice),
-    basisDate: position.basisDate ?? position.updatedAt.toISOString().slice(0, 10),
-    updatedAt: position.updatedAt.toISOString(),
+    basisDate: position.basisDate ?? updatedAt.slice(0, 10),
+    updatedAt,
   }
+}
+
+function normalizeTimestamp(value: Date | string) {
+  if (value instanceof Date) {
+    return value.toISOString()
+  }
+
+  const parsedDate = new Date(value)
+  return Number.isNaN(parsedDate.getTime()) ? new Date().toISOString() : parsedDate.toISOString()
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -73,7 +84,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       const now = new Date()
-      const [savedPosition] = await db
+      const [returnedPosition] = await db
         .insert(positions)
         .values({
           userId: session.userId,
@@ -101,6 +112,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           basisDate: positions.basisDate,
           updatedAt: positions.updatedAt,
         })
+
+      const savedPosition =
+        returnedPosition ??
+        (
+          await db
+            .select({
+              id: positions.id,
+              userId: positions.userId,
+              stockCode: positions.stockCode,
+              quantity: positions.quantity,
+              costPrice: positions.costPrice,
+              basisDate: positions.basisDate,
+              updatedAt: positions.updatedAt,
+            })
+            .from(positions)
+            .where(and(eq(positions.userId, session.userId), eq(positions.stockCode, parsedBody.data.stockCode)))
+            .limit(1)
+        )[0]
+
+      if (!savedPosition) {
+        return json(res, 500, { error: '持仓已提交，但服务暂时无法确认保存结果，请刷新后查看' })
+      }
 
       return json(res, 200, {
         position: serializePosition(savedPosition),
