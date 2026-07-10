@@ -1,6 +1,6 @@
 # HANDOFF
 
-Last updated: 2026-07-09
+Last updated: 2026-07-10
 
 ## Key Progress Memory
 
@@ -10,6 +10,7 @@ Last updated: 2026-07-09
 - Mobile UI has been refined for the quote cards and market-cap scenarios: quote title is now shorter, quote cards are single-column, latest price follows gain/loss color, market cap display switches between `亿` and `万亿`, target input uses `万亿`, scenario cards use a less crowded mobile layout, and each scenario shows distance from current price.
 - Position save responses are hardened: `PUT /api/positions` no longer depends solely on Drizzle `.returning()` and tolerates string/Date timestamp values, avoiding a false "service unavailable" response after a successful write.
 - Default/new-user position quantity is now `0`; the frontend migrates the old implicit `2000` share demo default back to `0` when it appears in local browser drafts.
+- Production database schema was pushed on 2026-07-10 after Vercel logs showed `/api/positions` failing because `positions.basis_date` did not exist.
 - Calculation rule now treats `quantity * costPrice` as original cost; applies implemented cash dividend, bonus share, and transfer records where `exDate > basisDate` and `exDate <= today`; adjusts effective quantity by share ratios; adds cash dividends to total return; excludes rights issues by default because they require user subscription/payment.
 - Latest verification passed: `npm run typecheck:server`, `npm run build`, `git diff --check`, live `listDividends()` and live `listQuotes()` smoke tests.
 - Live dividend smoke details: `300502` returned 10 records, latest implemented action was `2026-06-11` with `10转4股派10.00元`; `300308` returned 18 records, with the latest pre-disclosure lacking `exDate`, so it is not applied.
@@ -171,6 +172,7 @@ Additional runtime smoke check that passed:
 - 2026-07-09 follow-up verification passed: `npm run typecheck:server`, `npm run build`, `git diff --check`, live `listQuotes()` smoke test, and 390px mobile browser checks for stacked quote cards, stock switching, `万亿` target input, custom target auto-inclusion, and `距离现价`.
 - 2026-07-09 position-save hardening verification passed: `npm run typecheck:server`, `npm run build`, `git diff --check`; read-only DB check confirmed local `updatedAt` currently returns as `Date`, while the API is now defensive for string timestamps and empty `.returning()` results.
 - 2026-07-09 default-position verification passed: `npm run typecheck:server`, `npm run build`, `git diff --check`; new drafts now start at `0` shares and old local demo defaults are migrated away.
+- 2026-07-10 production DB fix passed: Vercel logs confirmed `column "basis_date" does not exist`; `npm run db:push -- --force` applied the production schema change, then live `POST /api/auth/register`, `PUT /api/positions`, and `GET /api/positions` succeeded with a temporary test account that was deleted afterward.
 
 ## Lessons And Pitfalls
 
@@ -183,6 +185,8 @@ Additional runtime smoke check that passed:
 - Rights issues are intentionally excluded from automatic adjustments because they require user subscription/payment; assuming participation would overstate returns.
 - `PUT /api/positions` can write successfully and still fail while building the response if the database driver returns no row from `.returning()` or a timestamp shape changes. Keep the post-write lookup and `Date|string` timestamp normalization.
 - When debugging a "save failed but data appears saved" report, inspect the server response phase separately from the database write. A subsequent page reload showing saved data usually means the write succeeded and response serialization failed.
+- Also check production Vercel logs before assuming the bug is in frontend state. The 2026-07-10 save failure was caused by DB schema drift: deployed code expected `positions.basis_date`, but production DB had not run the migration yet.
+- After adding Drizzle migrations or schema fields, run/push the migration against the real production database before relying on the deployed API.
 - Mobile layout bugs often show up as horizontal overflow, not obvious visual breakage. After layout changes, check a 390px viewport and verify `document.documentElement.scrollWidth` does not exceed the viewport width.
 - Grid/flex children that contain stock names, money values, or long badges should usually have `min-width: 0`, stable card dimensions, and overflow handling before adding more visual styling.
 - Local Vite is useful for frontend layout, but full auth/positions API verification should use `vercel dev` or production because the frontend calls `/api/*`.
@@ -257,7 +261,7 @@ Database files:
 - Set `POSTGRES_URL`
 - Set `AUTH_SECRET`
 - Optionally set `TUSHARE_TOKEN`
-- Run `npm run db:push`
+- Current schema has been pushed to production as of 2026-07-10; future schema changes still require `npm run db:push -- --force` or an equivalent migration step
 
 ### Priority 2
 
