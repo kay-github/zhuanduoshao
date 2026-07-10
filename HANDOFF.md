@@ -172,6 +172,23 @@ Additional runtime smoke check that passed:
 - 2026-07-09 position-save hardening verification passed: `npm run typecheck:server`, `npm run build`, `git diff --check`; read-only DB check confirmed local `updatedAt` currently returns as `Date`, while the API is now defensive for string timestamps and empty `.returning()` results.
 - 2026-07-09 default-position verification passed: `npm run typecheck:server`, `npm run build`, `git diff --check`; new drafts now start at `0` shares and old local demo defaults are migrated away.
 
+## Lessons And Pitfalls
+
+- Public quote providers are unstable by nature. Eastmoney failed from the local environment while Tencent still returned live data, so quote changes should be checked with a real `listQuotes()` smoke test and should keep multiple providers plus snapshot fallback.
+- Do not treat a public provider's empty or malformed payload as valid data. It should count as provider failure so the service can try the next source or use the last successful snapshot.
+- The UI target market-cap input is in `万亿`, but the scenario model still stores and calculates target market cap in `亿元`. Use the computed conversion layer in `src/App.vue`; do not mix units directly inside projection formulas.
+- New and anonymous users must not get nonzero demo holdings. Default quantity is `0`, and old local browser drafts that exactly match the former implicit `2000 股 / 84.5 成本` demo default are migrated back to `0`.
+- Corporate actions should only apply to actual holdings. The `basisDate` gate is important because it prevents historical dividends/bonus shares from being applied to a newly entered position.
+- Only implemented dividend/bonus/transfer records should change quantity or cash return. Pre-disclosure records without an `exDate`, or actions before/equal to `basisDate`, should not affect calculations.
+- Rights issues are intentionally excluded from automatic adjustments because they require user subscription/payment; assuming participation would overstate returns.
+- `PUT /api/positions` can write successfully and still fail while building the response if the database driver returns no row from `.returning()` or a timestamp shape changes. Keep the post-write lookup and `Date|string` timestamp normalization.
+- When debugging a "save failed but data appears saved" report, inspect the server response phase separately from the database write. A subsequent page reload showing saved data usually means the write succeeded and response serialization failed.
+- Mobile layout bugs often show up as horizontal overflow, not obvious visual breakage. After layout changes, check a 390px viewport and verify `document.documentElement.scrollWidth` does not exceed the viewport width.
+- Grid/flex children that contain stock names, money values, or long badges should usually have `min-width: 0`, stable card dimensions, and overflow handling before adding more visual styling.
+- Local Vite is useful for frontend layout, but full auth/positions API verification should use `vercel dev` or production because the frontend calls `/api/*`.
+- The user's GitHub token must never be written into repo files, logs, remotes, or docs. Prefer SSH or existing HTTPS credentials; if HTTPS is needed, avoid embedding tokens in remote URLs.
+- The machine-level Git proxy can be stale (`127.0.0.1:10808` was unavailable). For one-off GitHub operations, `git -c http.proxy= -c https.proxy= ...` can bypass that config without changing global settings.
+
 ## Current Constraints And Gaps
 
 - Auth and positions endpoints require `POSTGRES_URL` and `AUTH_SECRET`; without them those flows cannot run end-to-end

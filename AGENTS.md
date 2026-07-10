@@ -68,6 +68,8 @@ Target data fields:
 Important note:
 - Free public APIs may be usable for MVP, but they do not guarantee exchange-grade SLA or long-term stability.
 - The code should keep data-source coupling low.
+- Always smoke-test quote providers through `listQuotes()` after changing providers, fields, request headers, or fallback logic.
+- Do not remove quote/dividend snapshot fallback just because a public source works locally once.
 
 ## Calculation Rules
 
@@ -79,6 +81,7 @@ Current UI display/input unit:
 
 Current position:
 - each position stores `quantity`, `costPrice`, and `basisDate`
+- default/new-user `quantity` must be `0`; never use nonzero demo shares as the active default
 - original cost amount = `quantity * costPrice`
 - automatically apply implemented cash dividends, bonus shares, and capital reserve transfers with `exDate > basisDate` and `exDate <= today`
 - effective quantity is adjusted by bonus/transfer ratios
@@ -112,6 +115,9 @@ Default target total market cap list in MVP:
 
 - Keep changes minimal and pragmatic.
 - Keep the UI concise and tool-first; avoid unnecessary marketing copy in primary screens.
+- Treat mobile as the primary layout; after mobile UI changes, verify around 390px width and check that the document has no horizontal overflow.
+- Keep target market-cap UI input in `万亿元`, but keep internal scenario calculations normalized to the existing `亿元` target values unless the whole calculation model is intentionally migrated.
+- For save endpoints, avoid reporting a generic failure after a successful write; if a write succeeds but the returned row is missing or driver-shaped differently, perform a safe post-write lookup before responding.
 - Update this `AGENTS.md` whenever product rules, architecture choices, or major decisions change.
 - Maintain `HANDOFF.md` with current implementation status and next-step guidance for future handoff.
 - Do not commit or store secrets such as GitHub tokens in the repository.
