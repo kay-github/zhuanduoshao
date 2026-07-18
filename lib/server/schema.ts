@@ -1,4 +1,4 @@
-import { numeric, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core'
+import { date, numeric, pgTable, primaryKey, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core'
 
 export const users = pgTable(
   'users',
@@ -47,7 +47,23 @@ export const dividendSnapshots = pgTable('dividend_snapshots', {
   fetchedAt: timestamp('fetched_at', { withTimezone: true }).defaultNow().notNull(),
 })
 
+export const quoteHistory = pgTable(
+  'quote_history',
+  {
+    stockCode: varchar('stock_code', { length: 6 }).notNull(),
+    tradeDate: date('trade_date').notNull(),
+    latestPrice: numeric('latest_price', { precision: 18, scale: 4 }).notNull(),
+    totalMarketCap: numeric('total_market_cap', { precision: 20, scale: 0 }).notNull(),
+    priceChangePct: numeric('price_change_pct', { precision: 10, scale: 4 }).notNull(),
+    source: varchar('source', { length: 32 }).notNull(),
+    fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull(),
+    quoteAsOf: timestamp('quote_as_of', { withTimezone: true }),
+  },
+  (t) => [primaryKey({ columns: [t.stockCode, t.tradeDate] })],
+)
+
 export type UserRecord = typeof users.$inferSelect
 export type PositionRecord = typeof positions.$inferSelect
 export type QuoteSnapshotRecord = typeof quoteSnapshots.$inferSelect
 export type DividendSnapshotRecord = typeof dividendSnapshots.$inferSelect
+export type QuoteHistoryRecord = typeof quoteHistory.$inferSelect

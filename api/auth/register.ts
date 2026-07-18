@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { clearSessionCookie, createSessionToken, hashPassword, setSessionCookie } from '../../lib/server/auth.js'
 import { getDb } from '../../lib/server/db.js'
 import { json, methodNotAllowed, readJsonBody, handleApiError } from '../../lib/server/http.js'
-import { isAuthRateLimited } from '../../lib/server/rate-limit.js'
+import { authRateLimiter, readClientIp } from '../../lib/server/rate-limit.js'
 import { users } from '../../lib/server/schema.js'
 
 const registerSchema = z.object({
@@ -19,9 +19,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return methodNotAllowed(res, ['POST'])
     }
 
-    if (isAuthRateLimited(req)) {
+    // Every registration attempt counts: unlike login, high-volume successful
+    // registration from one IP is itself the abuse signal.
+    const clientIp = readClientIp(req)
+
+    if (authRateLimiter.isLimited(clientIp)) {
       return json(res, 429, { error: '尝试过于频繁，请稍后再试' })
     }
+
+    authRateLimiter.recordFailure(clientIp)
 
     const db = getDb()
 

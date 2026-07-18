@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { createSessionToken, setSessionCookie, verifyPassword } from '../../lib/server/auth.js'
 import { getDb } from '../../lib/server/db.js'
 import { json, methodNotAllowed, readJsonBody, handleApiError } from '../../lib/server/http.js'
-import { isAuthRateLimited } from '../../lib/server/rate-limit.js'
+import { authRateLimiter, readClientIp } from '../../lib/server/rate-limit.js'
 import { users } from '../../lib/server/schema.js'
 
 const loginSchema = z.object({
@@ -19,7 +19,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return methodNotAllowed(res, ['POST'])
     }
 
-    if (isAuthRateLimited(req)) {
+    // Only failed logins count toward the limit, so shared-exit IPs are not
+    // starved by legitimate successful traffic.
+    const clientIp = readClientIp(req)
+
+    if (authRateLimiter.isLimited(clientIp)) {
       return json(res, 429, { error: '尝试过于频繁，请稍后再试' })
     }
 
@@ -28,6 +32,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const parsedBody = loginSchema.safeParse(readJsonBody(req))
 
     if (!parsedBody.success) {
+      authRateLimiter.recordFailure(clientIp)
       return json(res, 400, { error: '用户名或密码格式不正确' })
     }
 
@@ -43,14 +48,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .limit(1)
 
     if (!user) {
+      authRateLimiter.recordFailure(clientIp)
       return json(res, 401, { error: '用户名或密码错误' })
     }
 
     const passwordMatched = await verifyPassword(parsedBody.data.password, user.passwordHash)
 
     if (!passwordMatched) {
+      authRateLimiter.recordFailure(clientIp)
       return json(res, 401, { error: '用户名或密码错误' })
     }
+
+    authRateLimiter.reset(clientIp)
 
     const token = await createSessionToken({ userId: user.id, username: user.username })
     setSessionCookie(res, token)

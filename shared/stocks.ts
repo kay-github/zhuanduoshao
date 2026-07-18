@@ -1,3 +1,6 @@
+// Fallback quotes are the last-ditch estimate when both live providers and DB
+// snapshots fail. Refresh them from live data after large market moves (see
+// AGENTS.md); keep priceChangePct at 0 because a stale daily move is noise.
 export const STOCKS = [
   {
     code: '300502',
@@ -5,9 +8,10 @@ export const STOCKS = [
     label: '',
     secid: '0.300502',
     fallbackQuote: {
-      latestPrice: 118.36,
-      totalMarketCap: 842_000_000_000,
-      priceChangePct: 3.82,
+      // Refreshed 2026-07-18 from live Eastmoney data.
+      latestPrice: 482.88,
+      totalMarketCap: 673_300_000_000,
+      priceChangePct: 0,
       updatedAt: '--:--:--',
     },
   },
@@ -17,9 +21,10 @@ export const STOCKS = [
     label: '',
     secid: '0.300308',
     fallbackQuote: {
-      latestPrice: 143.88,
-      totalMarketCap: 1_012_000_000_000,
-      priceChangePct: 2.41,
+      // Refreshed 2026-07-18 from live Eastmoney data.
+      latestPrice: 979.46,
+      totalMarketCap: 1_092_300_000_000,
+      priceChangePct: 0,
       updatedAt: '--:--:--',
     },
   },

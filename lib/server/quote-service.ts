@@ -1,7 +1,7 @@
 import { asc } from 'drizzle-orm'
 
 import { getDb } from './db.js'
-import { quoteSnapshots } from './schema.js'
+import { quoteHistory, quoteSnapshots } from './schema.js'
 import {
   STOCKS,
   getFallbackQuote,
@@ -486,6 +486,7 @@ async function persistQuoteSnapshots(providerQuotes: ProviderQuote[]) {
   try {
     const db = getDb()
     const validationNowMs = Date.now()
+    const todayDate = new Date(validationNowMs).toISOString().split('T')[0]
 
     for (const { quote, source } of providerQuotes) {
       const validatedFields = validateLiveQuoteFields(quote, validationNowMs)
@@ -496,6 +497,9 @@ async function persistQuoteSnapshots(providerQuotes: ProviderQuote[]) {
         continue
       }
 
+      const quoteAsOfDate = new Date(validatedFields.asOf)
+      const fetchedAtDate = new Date(fetchedAt)
+
       await db
         .insert(quoteSnapshots)
         .values({
@@ -504,9 +508,9 @@ async function persistQuoteSnapshots(providerQuotes: ProviderQuote[]) {
           totalMarketCap: String(validatedFields.totalMarketCap),
           priceChangePct: String(validatedFields.priceChangePct),
           quoteUpdatedAt: formatUpdatedAt(validatedFields.asOf),
-          quoteAsOf: new Date(validatedFields.asOf),
+          quoteAsOf: quoteAsOfDate,
           source,
-          fetchedAt: new Date(fetchedAt),
+          fetchedAt: fetchedAtDate,
         })
         .onConflictDoUpdate({
           target: quoteSnapshots.stockCode,
@@ -515,9 +519,36 @@ async function persistQuoteSnapshots(providerQuotes: ProviderQuote[]) {
             totalMarketCap: String(validatedFields.totalMarketCap),
             priceChangePct: String(validatedFields.priceChangePct),
             quoteUpdatedAt: formatUpdatedAt(validatedFields.asOf),
-            quoteAsOf: new Date(validatedFields.asOf),
+            quoteAsOf: quoteAsOfDate,
             source,
-            fetchedAt: new Date(fetchedAt),
+            fetchedAt: fetchedAtDate,
+          },
+        })
+
+      // Append to history table: one row per stock per trade date. During the
+      // trading day, repeated fetches overwrite today's row; after market close,
+      // the last upsert captures the closing values for charting / analysis.
+      await db
+        .insert(quoteHistory)
+        .values({
+          stockCode: quote.code,
+          tradeDate: todayDate,
+          latestPrice: String(validatedFields.latestPrice),
+          totalMarketCap: String(validatedFields.totalMarketCap),
+          priceChangePct: String(validatedFields.priceChangePct),
+          source,
+          fetchedAt: fetchedAtDate,
+          quoteAsOf: quoteAsOfDate,
+        })
+        .onConflictDoUpdate({
+          target: [quoteHistory.stockCode, quoteHistory.tradeDate],
+          set: {
+            latestPrice: String(validatedFields.latestPrice),
+            totalMarketCap: String(validatedFields.totalMarketCap),
+            priceChangePct: String(validatedFields.priceChangePct),
+            source,
+            fetchedAt: fetchedAtDate,
+            quoteAsOf: quoteAsOfDate,
           },
         })
     }

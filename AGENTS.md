@@ -70,6 +70,7 @@ Important note:
 - The code should keep data-source coupling low.
 - Always smoke-test quote providers through `listQuotes()` after changing providers, fields, request headers, or fallback logic.
 - Do not remove quote/dividend snapshot fallback just because a public source works locally once.
+- Built-in fallback quotes in `shared/stocks.ts` must be refreshed from live data when the stock universe changes or after large market moves (rough rule: whenever the fallback price drifts more than ~30% from reality); keep fallback `priceChangePct` at `0`.
 
 ## Calculation Rules
 
