@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { createSessionToken, setSessionCookie, verifyPassword } from '../../lib/server/auth.js'
 import { getDb } from '../../lib/server/db.js'
 import { json, methodNotAllowed, readJsonBody, handleApiError } from '../../lib/server/http.js'
+import { isAuthRateLimited } from '../../lib/server/rate-limit.js'
 import { users } from '../../lib/server/schema.js'
 
 const loginSchema = z.object({
@@ -16,6 +17,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     if (req.method !== 'POST') {
       return methodNotAllowed(res, ['POST'])
+    }
+
+    if (isAuthRateLimited(req)) {
+      return json(res, 429, { error: '尝试过于频繁，请稍后再试' })
     }
 
     const db = getDb()

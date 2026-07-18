@@ -1,0 +1,1 @@
+ALTER TABLE "quote_snapshots" ADD COLUMN "quote_as_of" timestamp with time zone;

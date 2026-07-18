@@ -1,39 +1,36 @@
 # HANDOFF
 
-Last updated: 2026-07-10
+Last updated: 2026-07-18
 
 ## Key Progress Memory
 
+- 2026-07-18 product round implemented on top of the quote-hardening refactor: draft-merge on login, dividend tax brackets, reverse projection (target profit → required price/market cap), custom target price-input mode, trading-session auto-refresh, auth rate limiting, disclaimer/tax notes, per-stock `getQuote` freshness, CI dedup.
+- IMPORTANT deployment gate: uncommitted migration `drizzle/0002_cooing_joystick.sql` adds `quote_snapshots.quote_as_of`. Run `npm run db:push -- --force` against production BEFORE deploying this code, otherwise `readSnapshotQuotes()` selects a missing column and the snapshot fallback chain silently breaks (same failure class as the 2026-07-10 `basis_date` incident).
 - Corporate-action automation for existing holdings is implemented end-to-end in the codebase: provider service, `/api/dividends`, persisted snapshots, `basisDate` on positions, frontend loading, and UI-side adjusted profit/projection calculations.
 - Provider strategy is settled for MVP: prefer Tushare Pro when `TUSHARE_TOKEN` is configured, fall back to Eastmoney public `RPT_SHAREBONUS_DET`, treat malformed/empty provider payloads as source failures, then reuse the latest `dividend_snapshots`, then fall back to empty corporate-action records.
-- Quote strategy is also hardened: Eastmoney + Tencent + Sina public quote providers, persisted `quote_snapshots`, and built-in fallback quote data only as the final fallback.
-- Mobile UI has been refined for the quote cards and market-cap scenarios: quote title is now shorter, quote cards are single-column, latest price follows gain/loss color, market cap display switches between `亿` and `万亿`, target input uses `万亿`, scenario cards use a less crowded mobile layout, and each scenario shows distance from current price.
-- Position save responses are hardened: `PUT /api/positions` no longer depends solely on Drizzle `.returning()` and tolerates string/Date timestamp values, avoiding a false "service unavailable" response after a successful write.
-- Default/new-user position quantity is now `0`; the frontend migrates the old implicit `2000` share demo default back to `0` when it appears in local browser drafts.
-- Production database schema was pushed on 2026-07-10 after Vercel logs showed `/api/positions` failing because `positions.basis_date` did not exist.
-- Calculation rule now treats `quantity * costPrice` as original cost; applies implemented cash dividend, bonus share, and transfer records where `exDate > basisDate` and `exDate <= today`; adjusts effective quantity by share ratios; adds cash dividends to total return; excludes rights issues by default because they require user subscription/payment.
-- Latest verification passed: `npm run typecheck:server`, `npm run build`, `git diff --check`, live `listDividends()` and live `listQuotes()` smoke tests.
-- Live dividend smoke details: `300502` returned 10 records, latest implemented action was `2026-06-11` with `10转4股派10.00元`; `300308` returned 18 records, with the latest pre-disclosure lacking `exDate`, so it is not applied.
+- Quote strategy is also hardened: Eastmoney + Tencent + Sina public quote providers, strict field validation with `validateLiveQuoteFields`, persisted `quote_snapshots` (now with `quote_as_of`), and built-in fallback quote data only as the final fallback.
+- Calculation rule treats `quantity * costPrice` as original cost; applies implemented cash dividend, bonus share, and transfer records where `exDate > basisDate` and `exDate <= today`; adjusts effective quantity by share ratios; deducts dividend tax by the user-selected holding-period bracket; adds after-tax cash dividends to total return; excludes rights issues by default.
 - Tushare account/token cannot be created or configured automatically without user-owned credentials, but the app is already token-ready through `TUSHARE_TOKEN`.
-- Remaining work is mainly environment/deployment verification: configure `POSTGRES_URL`, `AUTH_SECRET`, optionally `TUSHARE_TOKEN`, run DB migration/push against the real database, then verify `/api/quotes`, `/api/dividends`, auth, and position save/restore through `vercel dev` or production.
 
 ## Current Status
 
 Project name:
 - `赚多少`
 
-Current state:
-- Frontend scaffolded with `TypeScript + Vue 3 + Vite`
-- UI is in a refined MVP stage with mobile web as the priority
-- Backend foundation has been added for `Vercel Functions + PostgreSQL + Drizzle`
-- Real public quote integration is connected behind `lib/server/quote-service.ts`, with Sina added as a backup public source after local testing showed Eastmoney can fail while Tencent remains live
-- Frontend is wired to quotes/auth/positions APIs
-- Auth and positions flows depend on real environment variables and database availability
-- Runtime hardening has been added for Vercel Functions deployment
-- Runtime database access now uses `pg + drizzle-orm/node-postgres` for Vercel Postgres compatibility
-- Production register/login/session/position persistence path has been smoke-tested successfully
-- Quote runtime now uses multi-provider fetch plus persisted quote snapshots in PostgreSQL
-- Corporate action runtime now fetches dividend/bonus/transfer data and uses persisted dividend snapshots as fallback
+Current state (2026-07-18):
+- Frontend `TypeScript + Vue 3 + Vite`, split into `AppHeader` / `QuotePanel` / `ScenarioProjectionPanel` components with pure calculation logic in `src/lib/portfolio-calculations.ts` (vitest-covered)
+- Backend `Vercel Functions + PostgreSQL + Drizzle`, quote/dividend services with multi-provider + snapshot fallback
+- New this round (all implemented, verified by `npm run check`):
+  - Login/register no longer wipes nonzero unauthenticated drafts; server positions merge over drafts and the UI prompts to save unsaved local input
+  - `selectedScenarioTargets` restore falls back to defaults when the persisted list filters to empty
+  - Dividend tax bracket selector (`>1y` free / `1m-1y` 10% / `<1m` 20%) applied to cash dividends across current and projected returns; summary shows pre-tax and tax amounts
+  - Reverse projection: input a target total profit (`万元`) → required price, distance from current price, implied total market cap
+  - Custom target supports market-cap (`万亿`) and price-per-share (`元`) input modes, converted through the live cap/price ratio
+  - Quotes auto-refresh every 30s during A-share trading sessions while the page is visible; session state shown in the quote header
+  - `login`/`register` rate limited per IP (20 attempts / 10 min, instance memory)
+  - Notes card includes dividend-tax explanation and investment disclaimer; register dialog warns passwords cannot be recovered
+  - `getQuote` reports per-stock freshness via `freshnessByCode`; CI no longer double-runs typechecks
+- NOT yet done: production `db:push` for migration 0002, commit/deploy of this working tree, live smoke tests (`listQuotes`/`listDividends`), 390px visual check of the new scenario controls
 
 ## What Is Already Done
 
@@ -255,28 +252,23 @@ Database files:
 
 ## Recommended Next Steps
 
-### Priority 1
+### Priority 1 (deployment gate)
 
-- Configure database locally and on Vercel
-- Set `POSTGRES_URL`
-- Set `AUTH_SECRET`
-- Optionally set `TUSHARE_TOKEN`
-- Current schema has been pushed to production as of 2026-07-10; future schema changes still require `npm run db:push -- --force` or an equivalent migration step
+- Run `npm run db:push -- --force` against production for migration 0002 (`quote_snapshots.quote_as_of`) BEFORE deploying
+- Commit the working tree and deploy
+- After deploy: verify `/api/quotes` (including snapshot fallback), `/api/dividends`, `/api/auth/me`, and a position save/restore round trip
 
-### Priority 2
+### Priority 2 (verification of this round)
 
-- Recheck deployed `/api/quotes` and `/api/auth/me` after the latest patch is deployed
-- Recheck deployed `/api/dividends`
-- Run end-to-end verification through `vercel dev`
-- Register a user
-- Log in and out
-- Save both stock positions
-- Reload the page and confirm saved positions are restored
-- Set a historical `basisDate` before 300502's 2026-06-11 ex-date and confirm effective quantity/cash dividend adjustment appears
+- 390px mobile visual check: scenario mode switch, reverse projection cards, tax bracket select, no horizontal overflow
+- Live smoke: `listQuotes()` and `listDividends()`
+- E2E through `vercel dev`: register with a nonzero local draft present and confirm the draft survives and the unsaved-draft prompt appears; check 429 after >20 rapid login attempts
+- Verify dividend tax: pick a basisDate before 300502's 2026-06-11 ex-date, switch brackets, confirm cash dividend and profit change accordingly
 
 ### Priority 3
 
 - Decide whether to configure Tushare Pro as the long-term preferred corporate-action provider
+- P2 backlog from the 2026-07-18 product review (deliberately deferred): share-card image export, historical value curve (needs append-style quote snapshots — decide schema early), multi-lot positions, PWA manifest
 
 ## Suggested Workflow For The Next AI
 

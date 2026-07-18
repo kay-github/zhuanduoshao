@@ -1,6 +1,29 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { STOCKS, getFallbackQuote, isStockCode, type StockCode, type StockQuote } from '../shared/stocks'
+import AppHeader from './components/AppHeader.vue'
+import QuotePanel from './components/QuotePanel.vue'
+import ScenarioProjectionPanel from './components/ScenarioProjectionPanel.vue'
+import {
+  DIVIDEND_TAX_BRACKETS,
+  YUAN_PER_YI,
+  adjustPositionForCorporateActions,
+  calculateCurrentPositionMetrics,
+  calculateRequiredPriceForProfit,
+  calculateTargetMarketCapScenario,
+  getDividendTaxRate,
+  isDividendTaxBracketKey,
+  type DividendTaxBracketKey,
+} from './lib/portfolio-calculations'
+import {
+  formatChinaDateTime,
+  formatCurrency,
+  formatPercent,
+  formatPlainNumber,
+  formatShareQuantity,
+  formatYiUnit,
+  profitClass,
+} from './utils/financial-formatters'
 
 interface PositionDraft {
   quantity: number
@@ -21,6 +44,8 @@ interface QuotePayload {
   totalMarketCap: number
   priceChangePct: number
   updatedAt: string
+  asOf?: string | null
+  fetchedAt?: string | null
 }
 
 interface PositionPayload {
@@ -58,15 +83,20 @@ type DividendFreshness = 'live' | 'partial' | 'cached' | 'fallback'
 interface PersistedAppState {
   selectedCode?: string
   customMarketCap?: string
+  customTargetMode?: string
+  dividendTaxBracket?: string
+  targetProfitWan?: string
   selectedScenarioTargets?: number[]
   positionDrafts?: Partial<Record<StockCode, Partial<PositionDraft>>>
 }
 
 type AuthMode = 'login' | 'register'
+type CustomTargetMode = 'marketCap' | 'price'
 
 const presetMarketCaps = [10_000, 12_000, 13_000, 15_000, 18_000, 20_000]
 const defaultSelectedScenarioTargets = [12_000, 15_000, 20_000]
 const LOCAL_STATE_KEY = 'zhuanduoshao_app_state_v1'
+const QUOTE_AUTO_REFRESH_MS = 30_000
 const legacyDefaultPosition = {
   quantity: 2000,
   costPrice: 84.5,
@@ -79,6 +109,9 @@ const defaultPosition = {
 
 const selectedCode = ref<StockCode>('300502')
 const customMarketCap = ref('23000')
+const customTargetMode = ref<CustomTargetMode>('marketCap')
+const dividendTaxBracket = ref<DividendTaxBracketKey>('over-1y')
+const targetProfitWan = ref('')
 const authMode = ref<AuthMode>('login')
 const authDialogOpen = ref(false)
 const user = ref<UserSummary | null>(null)
@@ -140,19 +173,68 @@ const customMarketCapWanYi = computed({
   },
 })
 
+// Price-mode view over the same custom target: the target always lives in 亿
+// internally; a price input is converted through the current cap/price ratio.
+const customTargetPrice = computed({
+  get() {
+    const customValue = Number(customMarketCap.value)
+    const { latestPrice, totalMarketCap } = activeStock.value
+
+    if (!Number.isFinite(customValue) || customValue <= 0 || latestPrice <= 0 || totalMarketCap <= 0) {
+      return ''
+    }
+
+    return formatPlainNumber((customValue * YUAN_PER_YI * latestPrice) / totalMarketCap, 2)
+  },
+  set(value: string | number) {
+    const rawValue = String(value).trim()
+
+    if (!rawValue) {
+      customMarketCap.value = ''
+      return
+    }
+
+    const numericValue = Number(rawValue)
+    const { latestPrice, totalMarketCap } = activeStock.value
+
+    if (!Number.isFinite(numericValue) || numericValue < 0 || latestPrice <= 0 || totalMarketCap <= 0) {
+      return
+    }
+
+    customMarketCap.value = formatPlainNumber((numericValue / latestPrice) * (totalMarketCap / YUAN_PER_YI), 2)
+  },
+})
+
 const stockOptions = computed(() => STOCKS.map((stock) => quoteMap[stock.code]))
 const activeStock = computed(() => quoteMap[selectedCode.value])
 const activeDividend = computed(() => dividendMap[selectedCode.value])
 const activePosition = computed(() => positionDrafts[selectedCode.value])
-const quoteUpdatedAt = computed(() => activeStock.value.updatedAt)
-const adjustedPosition = computed(() => adjustPositionForCorporateActions(activePosition.value, activeDividend.value.records))
+const quoteTimeText = computed(() => {
+  if (activeStock.value.asOf) {
+    return `行情时点 ${formatChinaDateTime(activeStock.value.asOf)}`
+  }
 
-const costAmount = computed(() => adjustedPosition.value.originalCostAmount)
-const currentValue = computed(() => adjustedPosition.value.quantity * activeStock.value.latestPrice)
-const currentProfit = computed(() => currentValue.value + adjustedPosition.value.cashDividendAmount - costAmount.value)
-const currentProfitPct = computed(() =>
-  costAmount.value > 0 ? currentProfit.value / costAmount.value : 0,
+  if (activeStock.value.fetchedAt) {
+    return `缓存抓取 ${formatChinaDateTime(activeStock.value.fetchedAt)}`
+  }
+
+  return '内置回退数据'
+})
+const adjustedPosition = computed(() =>
+  adjustPositionForCorporateActions(
+    activePosition.value,
+    activeDividend.value.records,
+    todayDateValue(),
+    getDividendTaxRate(dividendTaxBracket.value),
+  ),
 )
+const currentMetrics = computed(() =>
+  calculateCurrentPositionMetrics(adjustedPosition.value, activeStock.value.latestPrice),
+)
+const costAmount = computed(() => currentMetrics.value.costAmount)
+const currentValue = computed(() => currentMetrics.value.currentValue)
+const currentProfit = computed(() => currentMetrics.value.currentProfit)
+const currentProfitPct = computed(() => currentMetrics.value.currentProfitPct)
 
 const targetMarketCaps = computed(() => {
   const values = [...presetMarketCaps]
@@ -171,29 +253,57 @@ const visibleTargetMarketCaps = computed(() =>
 
 const scenarioRows = computed(() =>
   visibleTargetMarketCaps.value.map((target) => {
-    const targetCap = target * 100_000_000
-    const targetPrice =
-      activeStock.value.totalMarketCap > 0
-        ? activeStock.value.latestPrice * (targetCap / activeStock.value.totalMarketCap)
-        : 0
-
-    const targetValue = adjustedPosition.value.quantity * targetPrice
-    const totalProfit = targetValue + adjustedPosition.value.cashDividendAmount - costAmount.value
-    const additionalProfit = targetValue - currentValue.value
-    const totalProfitPct = costAmount.value > 0 ? totalProfit / costAmount.value : 0
-    const distancePct = activeStock.value.latestPrice > 0 ? targetPrice / activeStock.value.latestPrice - 1 : 0
+    const scenario = calculateTargetMarketCapScenario({
+      targetMarketCapYi: target,
+      latestPrice: activeStock.value.latestPrice,
+      currentTotalMarketCap: activeStock.value.totalMarketCap,
+      adjustedQuantity: adjustedPosition.value.quantity,
+      cashDividendAmount: adjustedPosition.value.cashDividendAmount,
+      originalCostAmount: costAmount.value,
+      currentValue: currentValue.value,
+    })
 
     return {
       targetLabel: formatYiUnit(target),
-      targetPrice,
-      targetValue,
-      totalProfit,
-      additionalProfit,
-      totalProfitPct,
-      distancePct,
+      ...scenario,
     }
   }),
 )
+
+const reverseProjection = computed(() => {
+  const profitWan = Number(targetProfitWan.value)
+
+  if (!Number.isFinite(profitWan) || profitWan <= 0) {
+    return null
+  }
+
+  const result = calculateRequiredPriceForProfit({
+    targetTotalProfit: profitWan * 10_000,
+    latestPrice: activeStock.value.latestPrice,
+    currentTotalMarketCap: activeStock.value.totalMarketCap,
+    adjustedQuantity: adjustedPosition.value.quantity,
+    cashDividendAmount: adjustedPosition.value.cashDividendAmount,
+    originalCostAmount: costAmount.value,
+  })
+
+  if (!result.achievable) {
+    return {
+      achievable: false as const,
+      message:
+        adjustedPosition.value.quantity <= 0
+          ? '请先录入持仓数量后再反推'
+          : '按当前持仓，累计分红已覆盖该目标收益',
+    }
+  }
+
+  return {
+    achievable: true as const,
+    requiredPriceText: formatCurrency(result.requiredPrice),
+    requiredMarketCapText: formatYiUnit(result.requiredMarketCapYi),
+    distanceText: formatPercent(result.distancePct),
+    distancePct: result.distancePct,
+  }
+})
 
 const quoteStatusText = computed(() => {
   if (quotesPending.value) {
@@ -268,7 +378,8 @@ const customTargetSummary = computed(() => {
     return '未设置'
   }
 
-  return formatYiUnit(customValue)
+  const priceText = customTargetPrice.value ? `，对应股价约 ${formatCurrency(Number(customTargetPrice.value))}` : ''
+  return `${formatYiUnit(customValue)}${priceText}`
 })
 
 const positionSummaryText = computed(
@@ -286,10 +397,58 @@ const corporateActionSummaryText = computed(() => {
     return '暂无需要自动应用的已实施分红送转'
   }
 
+  const taxNote =
+    adjustedPosition.value.dividendTaxAmount > 0
+      ? `（税前 ${formatCurrency(adjustedPosition.value.preTaxCashDividendAmount)}，红利税 ${formatCurrency(
+          adjustedPosition.value.dividendTaxAmount,
+        )}）`
+      : ''
+
   return `${adjustedPosition.value.appliedActions.length} 次已实施分红送转，累计现金 ${formatCurrency(
     adjustedPosition.value.cashDividendAmount,
-  )}`
+  )}${taxNote}`
 })
+
+// A-share trading sessions (China time): 09:30-11:30, 13:00-15:00, Mon-Fri.
+// Holidays are not modeled; an extra refresh on a holiday is harmless.
+function isMarketTradingTime(now = new Date()) {
+  const chinaParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Shanghai',
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(now)
+  const readPart = (type: Intl.DateTimeFormatPartTypes) =>
+    chinaParts.find((part) => part.type === type)?.value ?? ''
+  const weekday = readPart('weekday')
+
+  if (weekday === 'Sat' || weekday === 'Sun') {
+    return false
+  }
+
+  const minutes = Number(readPart('hour')) * 60 + Number(readPart('minute'))
+  return (minutes >= 9 * 60 + 30 && minutes <= 11 * 60 + 30) || (minutes >= 13 * 60 && minutes <= 15 * 60)
+}
+
+const marketOpen = ref(isMarketTradingTime())
+let quoteRefreshTimer: ReturnType<typeof setInterval> | undefined
+
+const marketSessionText = computed(() => (marketOpen.value ? '交易时段 · 自动刷新' : '非交易时段'))
+
+function refreshQuotesOnTimer() {
+  marketOpen.value = isMarketTradingTime()
+
+  if (marketOpen.value && !quotesPending.value && document.visibilityState === 'visible') {
+    void loadQuotes()
+  }
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'visible') {
+    refreshQuotesOnTimer()
+  }
+}
 
 watch(selectedCode, () => {
   positionMessage.value = ''
@@ -303,6 +462,10 @@ watch(customMarketCap, () => {
 })
 
 watch(selectedScenarioTargets, () => {
+  persistLocalState()
+})
+
+watch([customTargetMode, dividendTaxBracket, targetProfitWan], () => {
   persistLocalState()
 })
 
@@ -345,6 +508,13 @@ onMounted(() => {
   void loadQuotes()
   void loadDividends()
   void restoreSession()
+  quoteRefreshTimer = setInterval(refreshQuotesOnTimer, QUOTE_AUTO_REFRESH_MS)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+})
+
+onUnmounted(() => {
+  clearInterval(quoteRefreshTimer)
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
 })
 
 function createQuoteMap() {
@@ -489,11 +659,6 @@ function restoreSavedQuantity(savedDraft: Partial<PositionDraft>) {
   return Math.trunc(savedQuantity)
 }
 
-function roundCalculatedValue(value: number, precision = 6) {
-  const scale = 10 ** precision
-  return Math.round((value + Number.EPSILON) * scale) / scale
-}
-
 function restoreLocalState() {
   const rawState = window.localStorage.getItem(LOCAL_STATE_KEY)
 
@@ -512,10 +677,28 @@ function restoreLocalState() {
       customMarketCap.value = parsedState.customMarketCap
     }
 
+    if (parsedState.customTargetMode === 'marketCap' || parsedState.customTargetMode === 'price') {
+      customTargetMode.value = parsedState.customTargetMode
+    }
+
+    if (isDividendTaxBracketKey(parsedState.dividendTaxBracket)) {
+      dividendTaxBracket.value = parsedState.dividendTaxBracket
+    }
+
+    if (typeof parsedState.targetProfitWan === 'string') {
+      targetProfitWan.value = parsedState.targetProfitWan
+    }
+
     if (Array.isArray(parsedState.selectedScenarioTargets)) {
-      selectedScenarioTargets.value = parsedState.selectedScenarioTargets.filter(
+      const restoredTargets = parsedState.selectedScenarioTargets.filter(
         (target): target is number => Number.isFinite(target) && target > 0,
       )
+
+      // An empty restored list would leave the projection blank with no watcher
+      // to refill it; fall back to the defaults instead.
+      if (restoredTargets.length > 0) {
+        selectedScenarioTargets.value = restoredTargets
+      }
     }
 
     if (parsedState.positionDrafts) {
@@ -548,6 +731,9 @@ function persistLocalState() {
   const nextState: PersistedAppState = {
     selectedCode: selectedCode.value,
     customMarketCap: customMarketCap.value,
+    customTargetMode: customTargetMode.value,
+    dividendTaxBracket: dividendTaxBracket.value,
+    targetProfitWan: targetProfitWan.value,
     selectedScenarioTargets: selectedScenarioTargets.value,
     positionDrafts: STOCKS.reduce(
       (all, stock) => {
@@ -578,6 +764,8 @@ function normalizeQuote(payload: QuotePayload) {
     totalMarketCap: payload.totalMarketCap,
     priceChangePct: payload.priceChangePct,
     updatedAt: payload.updatedAt,
+    asOf: typeof payload.asOf === 'string' ? payload.asOf : null,
+    fetchedAt: typeof payload.fetchedAt === 'string' ? payload.fetchedAt : null,
   } satisfies StockQuote
 }
 
@@ -592,47 +780,6 @@ function normalizeDividend(payload: DividendPayload) {
     label: payload.label,
     records: payload.records.filter((record) => record && typeof record.exDate === 'string'),
   } satisfies DividendPayload
-}
-
-function adjustPositionForCorporateActions(position: PositionDraft, records: DividendRecordPayload[]) {
-  const today = todayDateValue()
-  const originalCostAmount = position.quantity * position.costPrice
-  let quantity = position.quantity
-  let cashDividendAmount = 0
-  const appliedActions: DividendRecordPayload[] = []
-
-  for (const record of [...records].sort((a, b) => a.exDate.localeCompare(b.exDate))) {
-    if (!record.exDate || record.exDate > today || record.exDate <= position.basisDate) {
-      continue
-    }
-
-    if (record.planProgress && !record.planProgress.includes('实施')) {
-      continue
-    }
-
-    const beforeQuantity = quantity
-    const shareRatio = ((record.sendRatio ?? 0) + (record.transferRatio ?? 0)) / 10
-    const cashRatio = (record.cashDividendRatio ?? 0) / 10
-
-    if (shareRatio <= 0 && cashRatio <= 0) {
-      continue
-    }
-
-    cashDividendAmount = roundCalculatedValue(cashDividendAmount + beforeQuantity * cashRatio)
-    quantity = roundCalculatedValue(beforeQuantity * (1 + shareRatio))
-    appliedActions.push(record)
-  }
-
-  const adjustedCostAmount = Math.max(originalCostAmount - cashDividendAmount, 0)
-
-  return {
-    quantity,
-    originalCostAmount,
-    cashDividendAmount,
-    adjustedCostAmount,
-    adjustedCostPrice: quantity > 0 ? adjustedCostAmount / quantity : 0,
-    appliedActions,
-  }
 }
 
 function readApiError(payload: unknown, fallbackMessage: string) {
@@ -791,13 +938,16 @@ async function loadPositions() {
       throw new Error(readApiError(payload, '持仓加载失败'))
     }
 
-    resetPositionDrafts()
+    // Merge instead of overwrite: keep nonzero local drafts for stocks the
+    // account has no saved position for, so pre-login input survives login.
+    const savedCodes = new Set<StockCode>()
 
     for (const savedPosition of payload?.positions ?? []) {
       if (!isStockCode(savedPosition.stockCode)) {
         continue
       }
 
+      savedCodes.add(savedPosition.stockCode)
       positionDrafts[savedPosition.stockCode] = {
         quantity: savedPosition.quantity,
         costPrice: savedPosition.costPrice,
@@ -805,7 +955,14 @@ async function loadPositions() {
       }
     }
 
-    positionMessage.value = '已同步账号持仓'
+    const unsavedDraftCodes = STOCKS.filter(
+      (stock) => !savedCodes.has(stock.code) && positionDrafts[stock.code].quantity > 0,
+    )
+
+    positionMessage.value =
+      unsavedDraftCodes.length > 0
+        ? `已同步账号持仓；${unsavedDraftCodes.map((stock) => stock.name).join('、')} 的本地录入尚未保存到账号，请确认后点击保存`
+        : '已同步账号持仓'
   } catch (error) {
     positionError.value = readUnknownError(error, '持仓加载失败')
   } finally {
@@ -958,56 +1115,6 @@ async function savePosition(stockCode: StockCode) {
   }
 }
 
-function formatCurrency(value: number, withUnit = true) {
-  const result = new Intl.NumberFormat('zh-CN', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(value)
-
-  return withUnit ? `¥${result}` : result
-}
-
-function formatShareQuantity(value: number) {
-  return new Intl.NumberFormat('zh-CN', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
-  }).format(value)
-}
-
-function formatPlainNumber(value: number, maximumFractionDigits: number) {
-  return new Intl.NumberFormat('zh-CN', {
-    useGrouping: false,
-    minimumFractionDigits: 0,
-    maximumFractionDigits,
-  }).format(value)
-}
-
-function formatYiFromYuan(value: number) {
-  return formatYiUnit(value / 100_000_000)
-}
-
-function formatMarketCapFromYuan(value: number) {
-  return formatYiFromYuan(value)
-}
-
-function formatYiUnit(value: number) {
-  const usesWanYi = value >= 10_000
-  const displayValue = usesWanYi ? value / 10_000 : value
-  const maximumFractionDigits = usesWanYi ? 2 : Number.isInteger(value) ? 0 : 1
-
-  return `${new Intl.NumberFormat('zh-CN', {
-    minimumFractionDigits: 0,
-    maximumFractionDigits,
-  }).format(displayValue)}${usesWanYi ? '万亿' : '亿'}`
-}
-
-function formatPercent(value: number) {
-  return `${value >= 0 ? '+' : ''}${(value * 100).toFixed(2)}%`
-}
-
-function profitClass(value: number) {
-  return value >= 0 ? 'is-positive' : 'is-negative'
-}
 </script>
 
 <template>
@@ -1015,134 +1122,37 @@ function profitClass(value: number) {
     <div class="bg-orb bg-orb-left"></div>
     <div class="bg-orb bg-orb-right"></div>
 
-    <header class="topbar panel">
-      <div class="brand-block">
-        <div class="brand-mark">赚</div>
-        <div>
-          <h1>赚多少</h1>
-          <p class="brand-subtitle">持仓收益推演</p>
-        </div>
-      </div>
-
-      <div class="topbar-side">
-        <template v-if="user">
-          <div class="topbar-account-row">
-            <div class="session-pill">
-              <span class="session-label">账号</span>
-              <strong>{{ user.username }}</strong>
-            </div>
-
-            <button class="text-button session-action" type="button" :disabled="logoutPending" @click="logout">
-              {{ logoutPending ? '退出中...' : '退出' }}
-            </button>
-          </div>
-        </template>
-
-        <div v-else class="topbar-buttons">
-          <button class="ghost-button" type="button" @click="openAuth('login')">登录</button>
-          <button class="primary-button" type="button" @click="openAuth('register')">注册</button>
-        </div>
-      </div>
-
-      <form v-if="authDialogOpen && !user" class="auth-card" @submit.prevent="submitAuth">
-        <div class="auth-card-header">
-          <div>
-            <p class="section-kicker">账号</p>
-            <h3>{{ authMode === 'login' ? '登录账号' : '注册账号' }}</h3>
-          </div>
-          <button class="text-button" type="button" @click="closeAuthDialog">关闭</button>
-        </div>
-
-        <div class="auth-form-grid">
-          <label>
-            <span>用户名</span>
-            <input v-model.trim="authForm.username" type="text" minlength="3" maxlength="24" />
-          </label>
-
-          <label>
-            <span>密码</span>
-            <input v-model="authForm.password" type="password" minlength="6" maxlength="72" />
-          </label>
-        </div>
-
-        <p :class="['status-text', { 'is-negative': authError }]">
-          {{ authError || (authMode === 'login' ? '登录后可同步并保存你的持仓' : '注册后会自动登录并创建独立持仓记录') }}
-        </p>
-
-        <div class="auth-card-footer">
-          <button class="primary-button" type="submit" :disabled="authPending || logoutPending">
-            {{ authPending ? '提交中...' : authMode === 'login' ? '登录' : '注册并登录' }}
-          </button>
-
-          <button
-            class="text-button"
-            type="button"
-            @click="switchAuthMode(authMode === 'login' ? 'register' : 'login')"
-          >
-            {{ authMode === 'login' ? '没有账号？去注册' : '已有账号？去登录' }}
-          </button>
-        </div>
-      </form>
-
-      <p v-if="user || authError" :class="['status-text', 'topbar-status', { 'is-negative': authError }]">
-        {{ authError || '持仓数据按账号隔离保存' }}
-      </p>
-    </header>
+    <AppHeader
+      :user="user"
+      :auth-dialog-open="authDialogOpen"
+      :auth-mode="authMode"
+      :username="authForm.username"
+      :password="authForm.password"
+      :auth-pending="authPending"
+      :logout-pending="logoutPending"
+      :auth-error="authError"
+      @open-auth="openAuth"
+      @close-auth="closeAuthDialog"
+      @switch-auth-mode="switchAuthMode"
+      @submit-auth="submitAuth"
+      @logout="logout"
+      @update:username="authForm.username = $event"
+      @update:password="authForm.password = $event"
+    />
 
     <main class="dashboard-grid">
-      <section class="hero-card panel">
-        <div class="card-header stock-header">
-          <div>
-            <h3>行情</h3>
-          </div>
-
-          <div class="header-actions">
-            <span class="header-time">更新时间 {{ quoteUpdatedAt }}</span>
-            <button class="text-button" type="button" :disabled="quotesPending" @click="loadQuotes">
-              {{ quotesPending ? '刷新中...' : '刷新行情' }}
-            </button>
-          </div>
-        </div>
-
-        <p :class="['status-text', { 'is-negative': quotesError || quoteFreshness === 'fallback' }]">{{ quoteStatusText }}</p>
-
-        <div class="stock-grid">
-          <button
-            v-for="stock in stockOptions"
-            :key="stock.code"
-            type="button"
-            :class="['stock-card', { 'is-active': stock.code === selectedCode }]"
-            @click="selectedCode = stock.code"
-          >
-            <div class="stock-card-top">
-              <div>
-                <strong class="stock-card-name">{{ stock.name }}</strong>
-                <span class="stock-card-code">{{ stock.code }}</span>
-              </div>
-              <span :class="['stock-change', profitClass(stock.priceChangePct)]">
-                {{ formatPercent(stock.priceChangePct / 100) }}
-              </span>
-            </div>
-
-            <div class="stock-card-metrics">
-              <article>
-                <span>最新价</span>
-                <strong :class="['compact-number', profitClass(stock.priceChangePct)]">
-                  {{ formatCurrency(stock.latestPrice) }}
-                </strong>
-              </article>
-              <article>
-                <span>总市值</span>
-                <strong class="compact-number">{{ formatMarketCapFromYuan(stock.totalMarketCap) }}</strong>
-              </article>
-            </div>
-
-            <div class="stock-card-footer">
-              <span v-if="stock.code === selectedCode" class="stock-card-state">当前</span>
-            </div>
-          </button>
-        </div>
-      </section>
+      <QuotePanel
+        :stocks="stockOptions"
+        :selected-code="selectedCode"
+        :time-text="quoteTimeText"
+        :session-text="marketSessionText"
+        :pending="quotesPending"
+        :error="quotesError"
+        :is-fallback="quoteFreshness === 'fallback'"
+        :status-text="quoteStatusText"
+        @refresh="loadQuotes"
+        @select="selectedCode = $event"
+      />
 
       <section class="panel position-card">
         <div class="card-header">
@@ -1243,6 +1253,15 @@ function profitClass(value: number) {
             </label>
 
             <label>
+              <span>红利税档位（按持股期限）</span>
+              <select v-model="dividendTaxBracket">
+                <option v-for="bracket in DIVIDEND_TAX_BRACKETS" :key="bracket.key" :value="bracket.key">
+                  {{ bracket.label }} · {{ bracket.rate > 0 ? `${bracket.rate * 100}%` : '免税' }}
+                </option>
+              </select>
+            </label>
+
+            <label>
               <span>自定义目标市值</span>
               <div class="input-suffix">
                 <input v-model="customMarketCapWanYi" type="number" min="0" step="0.1" />
@@ -1277,106 +1296,19 @@ function profitClass(value: number) {
         </div>
       </section>
 
-      <section class="panel scenario-card">
-        <div class="card-header">
-          <div>
-            <p class="section-kicker">市值推演</p>
-            <h3>{{ activeStock.name }}</h3>
-          </div>
-        </div>
-
-        <div class="scenario-selector">
-          <div class="scenario-control-row">
-            <label class="scenario-custom-input">
-              <span>自定义目标</span>
-              <div class="input-suffix scenario-input-suffix">
-                <input v-model="customMarketCapWanYi" type="number" min="0" step="0.1" />
-                <em>万亿</em>
-              </div>
-            </label>
-          </div>
-
-          <div class="scenario-tags">
-            <button
-              v-for="target in targetMarketCaps"
-              :key="target"
-              type="button"
-              :class="['scenario-tag-button', { 'is-active': selectedScenarioTargets.includes(target) }]"
-              :aria-pressed="selectedScenarioTargets.includes(target)"
-              @click="toggleScenarioTarget(target)"
-            >
-              {{ formatYiUnit(target) }}
-            </button>
-          </div>
-        </div>
-
-        <div class="scenario-mobile-list">
-          <article v-for="row in scenarioRows" :key="`${row.targetLabel}-mobile`" class="scenario-mobile-card">
-            <div class="scenario-mobile-header">
-              <div>
-                <span>目标市值</span>
-                <strong>{{ row.targetLabel }}</strong>
-              </div>
-              <span :class="['scenario-mobile-chip', profitClass(row.additionalProfit)]">
-                新增 {{ formatCurrency(row.additionalProfit) }}
-              </span>
-            </div>
-
-            <div class="scenario-mobile-main">
-              <article>
-                <span>对应股价</span>
-                <strong :class="profitClass(row.additionalProfit)">{{ formatCurrency(row.targetPrice) }}</strong>
-              </article>
-              <article>
-                <span>距离现价</span>
-                <strong :class="profitClass(row.distancePct)">{{ formatPercent(row.distancePct) }}</strong>
-              </article>
-            </div>
-
-            <div class="scenario-mobile-grid">
-              <article>
-                <span>总收益率</span>
-                <strong :class="profitClass(row.totalProfit)">{{ formatPercent(row.totalProfitPct) }}</strong>
-              </article>
-              <article>
-                <span>持仓市值</span>
-                <strong>{{ formatCurrency(row.targetValue) }}</strong>
-              </article>
-              <article>
-                <span>总收益</span>
-                <strong :class="profitClass(row.totalProfit)">{{ formatCurrency(row.totalProfit) }}</strong>
-              </article>
-            </div>
-          </article>
-        </div>
-
-        <div class="table-wrap scenario-table">
-          <table>
-            <thead>
-              <tr>
-                <th>目标总市值</th>
-                <th>对应股价</th>
-                <th>距离现价</th>
-                <th>持仓市值</th>
-                <th>相对成本总收益</th>
-                <th>总收益率</th>
-                <th>新增收益</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in scenarioRows" :key="row.targetLabel">
-                <td>{{ row.targetLabel }}</td>
-                <td>{{ formatCurrency(row.targetPrice) }}</td>
-                <td :class="profitClass(row.distancePct)">{{ formatPercent(row.distancePct) }}</td>
-                <td>{{ formatCurrency(row.targetValue) }}</td>
-                <td :class="profitClass(row.totalProfit)">{{ formatCurrency(row.totalProfit) }}</td>
-                <td :class="profitClass(row.totalProfit)">{{ formatPercent(row.totalProfitPct) }}</td>
-                <td :class="profitClass(row.additionalProfit)">{{ formatCurrency(row.additionalProfit) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <ScenarioProjectionPanel
+        v-model:custom-target="customMarketCapWanYi"
+        v-model:custom-target-price="customTargetPrice"
+        v-model:custom-target-mode="customTargetMode"
+        v-model:target-profit-wan="targetProfitWan"
+        :stock-name="activeStock.name"
+        :custom-target-summary="`当前目标 ${customTargetSummary}`"
+        :reverse-projection="reverseProjection"
+        :target-market-caps="targetMarketCaps"
+        :selected-targets="selectedScenarioTargets"
+        :rows="scenarioRows"
+        @toggle-target="toggleScenarioTarget"
+      />
 
       <section class="panel notes-card">
         <div class="card-header">
@@ -1396,8 +1328,16 @@ function profitClass(value: number) {
             <p>目标市值输入使用万亿元，展示会在亿元和万亿元之间自动切换，未来推演按总市值计算。</p>
           </article>
           <article class="note-item">
+            <strong>税费</strong>
+            <p>现金分红按所选持股期限档位自动扣减红利税（超1年免税、1个月-1年10%、不足1个月20%）；推演未计入印花税与佣金。</p>
+          </article>
+          <article class="note-item">
             <strong>账号</strong>
-            <p>已接入轻量用户名体系；未登录输入会保存在当前浏览器，登录后可同步到账号下。</p>
+            <p>已接入轻量用户名体系；未登录输入会保存在当前浏览器，登录后可同步到账号下。密码不支持找回，请妥善保管。</p>
+          </article>
+          <article class="note-item">
+            <strong>免责</strong>
+            <p>本工具所有数据与推演结果仅供个人估算参考，不构成任何投资建议；行情来自公开接口，可能存在延迟或误差。</p>
           </article>
         </div>
       </section>

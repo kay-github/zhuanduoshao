@@ -3,16 +3,23 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "packageManager": "npm@10.8.2",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0",
+    "npm": ">=10.8.0"
+  },
   "scripts": {
     "dev": "vite",
-    "build": "vue-tsc -b && vite build",
+    "build": "npm run typecheck && npm run typecheck:server && vite build",
+    "typecheck": "vue-tsc -b",
     "typecheck:server": "tsc -p tsconfig.server.json",
+    "test": "vitest run",
+    "check": "npm run test && npm run build",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@vercel/node": "^5.7.5",
     "bcryptjs": "^3.0.3",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
@@ -23,11 +30,17 @@
   },
   "devDependencies": {
     "@types/node": "^24.12.2",
+    "@vercel/node": "^5.7.5",
     "@vitejs/plugin-vue": "^6.0.5",
     "@vue/tsconfig": "^0.9.1",
     "drizzle-kit": "^0.31.10",
     "typescript": "~6.0.2",
     "vite": "^8.0.4",
+    "vitest": "^4.1.10",
     "vue-tsc": "^3.2.6"
+  },
+  "overrides": {
+    "postcss": "^8.5.10",
+    "ws": "^8.21.0"
   }
 }

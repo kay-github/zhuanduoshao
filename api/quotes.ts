@@ -23,6 +23,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         quote: quoteResult.quote,
         freshness: quoteResult.freshness,
         source: quoteResult.source,
+        fetchedAt: quoteResult.fetchedAt,
+        asOf: quoteResult.asOf,
       })
     }
 
@@ -32,6 +34,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       quotes: quoteFeed.quotes,
       freshness: quoteFeed.freshness,
       source: quoteFeed.source,
+      fetchedAt: quoteFeed.fetchedAt,
+      asOf: quoteFeed.asOf,
     })
   } catch (error) {
     return handleApiError(res, error)

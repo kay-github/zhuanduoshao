@@ -35,6 +35,7 @@ export const quoteSnapshots = pgTable('quote_snapshots', {
   totalMarketCap: numeric('total_market_cap', { precision: 20, scale: 0 }).notNull(),
   priceChangePct: numeric('price_change_pct', { precision: 10, scale: 4 }).notNull(),
   quoteUpdatedAt: varchar('quote_updated_at', { length: 8 }).notNull(),
+  quoteAsOf: timestamp('quote_as_of', { withTimezone: true }),
   source: varchar('source', { length: 32 }).notNull(),
   fetchedAt: timestamp('fetched_at', { withTimezone: true }).defaultNow().notNull(),
 })

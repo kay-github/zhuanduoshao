@@ -85,7 +85,8 @@ Current position:
 - original cost amount = `quantity * costPrice`
 - automatically apply implemented cash dividends, bonus shares, and capital reserve transfers with `exDate > basisDate` and `exDate <= today`
 - effective quantity is adjusted by bonus/transfer ratios
-- cash dividend amount is added to total return
+- provider cash dividends are pre-tax; the UI applies a user-selected A-share dividend tax bracket by holding period (`>1y` 0%, `1m-1y` 10%, `<1m` 20%) and all return calculations use the after-tax cash amount
+- cash dividend amount (after tax) is added to total return
 - current holding value = `effective quantity * latestPrice`
 - current profit = `current holding value + cash dividend amount - original cost amount`
 - current profit rate = `current profit / original cost amount`
@@ -95,6 +96,8 @@ Future scenario projection:
 - target holding value = `effective quantity * targetPrice`
 - total future profit = `target holding value + cash dividend amount - original cost amount`
 - additional profit from now = `target holding value - current holding value`
+- reverse projection: given a desired total profit, solve `requiredPrice = (targetProfit + originalCost - cashDividends) / effectiveQuantity` and the implied total market cap; unachievable without an effective holding
+- custom target supports two input modes: total market cap (`万亿`) or price per share (`元`); price input is converted through the current cap/price ratio and the target is always stored in `亿`
 
 Assumption:
 - Projection assumes no future unannounced corporate actions beyond already implemented records.
@@ -117,6 +120,10 @@ Default target total market cap list in MVP:
 - Keep the UI concise and tool-first; avoid unnecessary marketing copy in primary screens.
 - Treat mobile as the primary layout; after mobile UI changes, verify around 390px width and check that the document has no horizontal overflow.
 - Keep target market-cap UI input in `万亿元`, but keep internal scenario calculations normalized to the existing `亿元` target values unless the whole calculation model is intentionally migrated.
+- Quotes auto-refresh every 30s only during A-share trading sessions (09:30-11:30, 13:00-15:00 China time, weekdays) and only while the page is visible; holidays are not modeled.
+- Login/register must never wipe nonzero unauthenticated drafts: merge server positions over drafts and prompt the user to save unsaved local input, instead of resetting first.
+- Auth endpoints are rate limited per IP in instance memory (soft cap, serverless-local); keep the limiter dependency-free.
+- The notes card must keep the investment disclaimer and the dividend-tax explanation; the register dialog must mention that passwords cannot be recovered.
 - For save endpoints, avoid reporting a generic failure after a successful write; if a write succeeds but the returned row is missing or driver-shaped differently, perform a safe post-write lookup before responding.
 - Update this `AGENTS.md` whenever product rules, architecture choices, or major decisions change.
 - Maintain `HANDOFF.md` with current implementation status and next-step guidance for future handoff.

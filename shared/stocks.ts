@@ -8,7 +8,7 @@ export const STOCKS = [
       latestPrice: 118.36,
       totalMarketCap: 842_000_000_000,
       priceChangePct: 3.82,
-      updatedAt: '14:57:20',
+      updatedAt: '--:--:--',
     },
   },
   {
@@ -20,7 +20,7 @@ export const STOCKS = [
       latestPrice: 143.88,
       totalMarketCap: 1_012_000_000_000,
       priceChangePct: 2.41,
-      updatedAt: '14:57:20',
+      updatedAt: '--:--:--',
     },
   },
 ] as const
@@ -34,6 +34,8 @@ export type StockQuote = {
   totalMarketCap: number
   priceChangePct: number
   updatedAt: string
+  asOf: string | null
+  fetchedAt: string | null
 }
 
 export function isStockCode(value: string): value is StockCode {
@@ -55,6 +57,8 @@ export function getFallbackQuote(code: StockCode): StockQuote {
     totalMarketCap: stock.fallbackQuote.totalMarketCap,
     priceChangePct: stock.fallbackQuote.priceChangePct,
     updatedAt: stock.fallbackQuote.updatedAt,
+    asOf: null,
+    fetchedAt: null,
   }
 }
 
