@@ -4,6 +4,8 @@ Last updated: 2026-07-18
 
 ## Key Progress Memory
 
+- 2026-07-19: share-card export shipped. `src/lib/share-card.ts` builds pure card data (unit-tested), `src/lib/share-card-renderer.ts` renders a 2x canvas PNG and prefers the Web Share API (mobile) with download fallback. Entry points: a share button on every mobile scenario card and a 分享 column in the desktop table. Verified with headless Chromium at 390px: no horizontal overflow, PNG renders correctly with profit headline, metric panel, and disclaimer.
+- 2026-07-18 hardening round: fallback quotes refreshed to live values (AGENTS.md documents the ~30% drift refresh rule), auth rate limiting now failure-only for login (50/10min, testable factory + unit tests), `quote_history` table (migration 0003, pushed to production) captures one row per stock per trade date via upsert during trading hours.
 - 2026-07-18 product round implemented on top of the quote-hardening refactor: draft-merge on login, dividend tax brackets, reverse projection (target profit → required price/market cap), custom target price-input mode, trading-session auto-refresh, auth rate limiting, disclaimer/tax notes, per-stock `getQuote` freshness, CI dedup.
 - IMPORTANT deployment gate: uncommitted migration `drizzle/0002_cooing_joystick.sql` adds `quote_snapshots.quote_as_of`. Run `npm run db:push -- --force` against production BEFORE deploying this code, otherwise `readSnapshotQuotes()` selects a missing column and the snapshot fallback chain silently breaks (same failure class as the 2026-07-10 `basis_date` incident).
 - Corporate-action automation for existing holdings is implemented end-to-end in the codebase: provider service, `/api/dividends`, persisted snapshots, `basisDate` on positions, frontend loading, and UI-side adjusted profit/projection calculations.
@@ -270,7 +272,7 @@ Database files:
 ### Priority 3
 
 - Decide whether to configure Tushare Pro as the long-term preferred corporate-action provider
-- P2 backlog from the 2026-07-18 product review (deliberately deferred): share-card image export, historical value curve (needs append-style quote snapshots — decide schema early), multi-lot positions, PWA manifest
+- P2 backlog from the 2026-07-18 product review (deliberately deferred): historical value curve (quote_history is accumulating daily rows since 2026-07-18), multi-lot positions, PWA manifest. Share-card image export shipped 2026-07-19.
 
 ## Suggested Workflow For The Next AI
 

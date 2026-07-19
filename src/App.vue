@@ -15,6 +15,8 @@ import {
   isDividendTaxBracketKey,
   type DividendTaxBracketKey,
 } from './lib/portfolio-calculations'
+import { buildShareCardData } from './lib/share-card'
+import { exportShareCard } from './lib/share-card-renderer'
 import {
   formatChinaDateTime,
   formatCurrency,
@@ -269,6 +271,43 @@ const scenarioRows = computed(() =>
     }
   }),
 )
+
+const sharePendingTarget = ref<number | null>(null)
+const shareStatusText = ref('')
+
+async function shareScenario(targetMarketCapYi: number) {
+  const row = scenarioRows.value.find((item) => item.targetMarketCapYi === targetMarketCapYi)
+
+  if (!row || sharePendingTarget.value !== null) {
+    return
+  }
+
+  sharePendingTarget.value = targetMarketCapYi
+  shareStatusText.value = ''
+
+  try {
+    const card = buildShareCardData({
+      stockName: activeStock.value.name,
+      stockCode: activeStock.value.code,
+      latestPrice: activeStock.value.latestPrice,
+      targetMarketCapYi,
+      targetPrice: row.targetPrice,
+      distancePct: row.distancePct,
+      adjustedQuantity: adjustedPosition.value.quantity,
+      targetValue: row.targetValue,
+      totalProfit: row.totalProfit,
+      totalProfitPct: row.totalProfitPct,
+      generatedDate: todayDateValue(),
+    })
+
+    const result = await exportShareCard(card, `赚多少-${activeStock.value.name}-${targetMarketCapYi}亿.png`)
+    shareStatusText.value = result === 'shared' ? '已打开系统分享' : '分享图已保存到下载'
+  } catch (error) {
+    shareStatusText.value = readUnknownError(error, '分享图生成失败')
+  } finally {
+    sharePendingTarget.value = null
+  }
+}
 
 const reverseProjection = computed(() => {
   const profitWan = Number(targetProfitWan.value)
@@ -1307,7 +1346,10 @@ async function savePosition(stockCode: StockCode) {
         :target-market-caps="targetMarketCaps"
         :selected-targets="selectedScenarioTargets"
         :rows="scenarioRows"
+        :share-pending-target="sharePendingTarget"
+        :share-status-text="shareStatusText"
         @toggle-target="toggleScenarioTarget"
+        @share="shareScenario"
       />
 
       <section class="panel notes-card">

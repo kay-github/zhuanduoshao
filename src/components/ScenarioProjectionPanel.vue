@@ -3,6 +3,7 @@ import { formatCurrency, formatPercent, formatYiUnit, profitClass } from '../uti
 
 interface ScenarioRow {
   targetLabel: string
+  targetMarketCapYi: number
   targetPrice: number
   targetValue: number
   totalProfit: number
@@ -33,6 +34,8 @@ defineProps<{
   targetMarketCaps: number[]
   selectedTargets: number[]
   rows: ScenarioRow[]
+  sharePendingTarget: number | null
+  shareStatusText: string
 }>()
 
 defineEmits<{
@@ -41,6 +44,7 @@ defineEmits<{
   'update:customTargetMode': [value: CustomTargetMode]
   'update:targetProfitWan': [value: string]
   toggleTarget: [target: number]
+  share: [targetMarketCapYi: number]
 }>()
 </script>
 
@@ -190,8 +194,19 @@ defineEmits<{
             <strong :class="profitClass(row.totalProfit)">{{ formatCurrency(row.totalProfit) }}</strong>
           </article>
         </div>
+
+        <button
+          class="ghost-button scenario-share-button"
+          type="button"
+          :disabled="sharePendingTarget !== null"
+          @click="$emit('share', row.targetMarketCapYi)"
+        >
+          {{ sharePendingTarget === row.targetMarketCapYi ? '生成中...' : '生成分享图' }}
+        </button>
       </article>
     </div>
+
+    <p v-if="shareStatusText" class="status-text scenario-share-status">{{ shareStatusText }}</p>
 
     <div class="table-wrap scenario-table">
       <table>
@@ -204,6 +219,7 @@ defineEmits<{
             <th>相对成本总收益</th>
             <th>总收益率</th>
             <th>新增收益</th>
+            <th>分享</th>
           </tr>
         </thead>
         <tbody>
@@ -215,6 +231,16 @@ defineEmits<{
             <td :class="profitClass(row.totalProfit)">{{ formatCurrency(row.totalProfit) }}</td>
             <td :class="profitClass(row.totalProfit)">{{ formatPercent(row.totalProfitPct) }}</td>
             <td :class="profitClass(row.additionalProfit)">{{ formatCurrency(row.additionalProfit) }}</td>
+            <td>
+              <button
+                class="text-button"
+                type="button"
+                :disabled="sharePendingTarget !== null"
+                @click="$emit('share', row.targetMarketCapYi)"
+              >
+                {{ sharePendingTarget === row.targetMarketCapYi ? '生成中' : '分享图' }}
+              </button>
+            </td>
           </tr>
         </tbody>
       </table>
