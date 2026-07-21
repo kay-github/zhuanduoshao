@@ -7,18 +7,38 @@ import { parseCookies } from './http.js'
 
 const SESSION_COOKIE_NAME = 'zhuanduoshao_session'
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7
+const MIN_AUTH_SECRET_LENGTH = 32
+const AUTH_SECRET_PLACEHOLDER_PATTERN =
+  /(change[-_ ]?me|replace[-_ ]?(me|this|with)|your[-_ ]?(auth[-_ ]?)?secret|example[-_ ]?(auth[-_ ]?)?secret)/i
 
 interface SessionUser {
   userId: string
   username: string
 }
 
-function getAuthSecret() {
-  if (!process.env.AUTH_SECRET) {
+export function validateAuthSecret(value: string | undefined) {
+  const secret = value?.trim()
+
+  if (!secret) {
     throw new ConfigurationError('服务端尚未配置 AUTH_SECRET')
   }
 
-  return new TextEncoder().encode(process.env.AUTH_SECRET)
+  if (secret.length < MIN_AUTH_SECRET_LENGTH) {
+    throw new ConfigurationError(`AUTH_SECRET 至少需要 ${MIN_AUTH_SECRET_LENGTH} 个字符`)
+  }
+
+  const compactSecret = secret.toLowerCase().replace(/[^a-z0-9]/g, '')
+  const isRepeatedWeakWord = /^(secret|password|changeme|example|test|development|dev)+\d*$/.test(compactSecret)
+
+  if (AUTH_SECRET_PLACEHOLDER_PATTERN.test(secret) || isRepeatedWeakWord) {
+    throw new ConfigurationError('AUTH_SECRET 不能使用示例值或占位值')
+  }
+
+  return secret
+}
+
+function getAuthSecret() {
+  return new TextEncoder().encode(validateAuthSecret(process.env.AUTH_SECRET))
 }
 
 function buildCookie(value: string, maxAge: number) {

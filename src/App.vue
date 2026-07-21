@@ -15,6 +15,17 @@ import {
   isDividendTaxBracketKey,
   type DividendTaxBracketKey,
 } from './lib/portfolio-calculations'
+import {
+  MAX_POSITION_COST_PRICE,
+  MAX_POSITION_QUANTITY,
+  clonePositionDrafts,
+  getChinaDateString,
+  isValidBasisDate,
+  mergeAnonymousDraftsWithSavedPositions,
+  validatePositionDraft,
+  type PositionDraft,
+} from './lib/position-draft-state'
+import { createSessionEpoch } from './lib/session-epoch'
 import { buildShareCardData } from './lib/share-card'
 import { exportShareCard } from './lib/share-card-renderer'
 import {
@@ -26,12 +37,6 @@ import {
   formatYiUnit,
   profitClass,
 } from './utils/financial-formatters'
-
-interface PositionDraft {
-  quantity: number
-  costPrice: number
-  basisDate: string
-}
 
 interface UserSummary {
   id: string
@@ -51,6 +56,7 @@ interface QuotePayload {
 }
 
 interface PositionPayload {
+  userId?: string
   stockCode: string
   quantity: number
   costPrice: number
@@ -83,10 +89,13 @@ type QuoteFreshness = 'live' | 'snapshot' | 'fallback'
 type DividendFreshness = 'live' | 'partial' | 'cached' | 'fallback'
 
 interface PersistedAppState {
+  stateVersion?: number
+  positionDraftScope?: 'anonymous'
   selectedCode?: string
   customMarketCap?: string
   customTargetMode?: string
   dividendTaxBracket?: string
+  dividendTaxBrackets?: Partial<Record<StockCode, string>>
   targetProfitWan?: string
   selectedScenarioTargets?: number[]
   positionDrafts?: Partial<Record<StockCode, Partial<PositionDraft>>>
@@ -94,25 +103,29 @@ interface PersistedAppState {
 
 type AuthMode = 'login' | 'register'
 type CustomTargetMode = 'marketCap' | 'price'
+type SavePositionResult = 'saved' | 'changed-after-submit' | 'stale-session'
 
 const presetMarketCaps = [10_000, 12_000, 13_000, 15_000, 18_000, 20_000]
 const defaultSelectedScenarioTargets = [12_000, 15_000, 20_000]
-const LOCAL_STATE_KEY = 'zhuanduoshao_app_state_v1'
+const LOCAL_STATE_VERSION = 2
+const LOCAL_STATE_KEY = 'zhuanduoshao_app_state_v2'
+const LEGACY_LOCAL_STATE_KEY = 'zhuanduoshao_app_state_v1'
 const QUOTE_AUTO_REFRESH_MS = 30_000
+const SESSION_EXPIRED_MESSAGE = '登录状态已失效，已恢复登录前的本地草稿，请重新登录'
+const SESSION_CHANGED_MESSAGE = '登录账号已在其他页面变更，已恢复登录前的本地草稿，请重新登录'
 const legacyDefaultPosition = {
   quantity: 2000,
   costPrice: 84.5,
 }
 const defaultPosition = {
   quantity: 0,
-  costPrice: 84.5,
+  costPrice: 0,
   basisDate: todayDateValue(),
 }
 
 const selectedCode = ref<StockCode>('300502')
 const customMarketCap = ref('23000')
 const customTargetMode = ref<CustomTargetMode>('marketCap')
-const dividendTaxBracket = ref<DividendTaxBracketKey>('over-1y')
 const targetProfitWan = ref('')
 const authMode = ref<AuthMode>('login')
 const authDialogOpen = ref(false)
@@ -132,6 +145,7 @@ const positionEditorOpen = ref(false)
 const selectedScenarioTargets = ref<number[]>([...defaultSelectedScenarioTargets])
 const positionMessage = ref('')
 const positionError = ref('')
+const localDraftError = ref('')
 const authPending = ref(false)
 const logoutPending = ref(false)
 const authError = ref('')
@@ -144,8 +158,13 @@ const authForm = reactive({
 const quoteMap = reactive(createQuoteMap())
 const dividendMap = reactive(createDividendMap())
 const positionDrafts = reactive(createPositionDrafts())
+const dividendTaxBrackets = reactive(createDividendTaxBracketMap())
+const pendingAnonymousDraftCodes = ref<StockCode[]>([])
 
 let localStateReady = false
+let anonymousDraftSnapshot = createPositionDrafts()
+const sessionEpoch = createSessionEpoch()
+let positionLoadSequence = 0
 
 const customMarketCapWanYi = computed({
   get() {
@@ -211,6 +230,12 @@ const stockOptions = computed(() => STOCKS.map((stock) => quoteMap[stock.code]))
 const activeStock = computed(() => quoteMap[selectedCode.value])
 const activeDividend = computed(() => dividendMap[selectedCode.value])
 const activePosition = computed(() => positionDrafts[selectedCode.value])
+const activeDividendTaxBracket = computed({
+  get: () => dividendTaxBrackets[selectedCode.value],
+  set: (value: DividendTaxBracketKey) => {
+    dividendTaxBrackets[selectedCode.value] = value
+  },
+})
 const quoteTimeText = computed(() => {
   if (activeStock.value.asOf) {
     return `行情时点 ${formatChinaDateTime(activeStock.value.asOf)}`
@@ -227,7 +252,7 @@ const adjustedPosition = computed(() =>
     activePosition.value,
     activeDividend.value.records,
     todayDateValue(),
-    getDividendTaxRate(dividendTaxBracket.value),
+    getDividendTaxRate(activeDividendTaxBracket.value),
   ),
 )
 const currentMetrics = computed(() =>
@@ -399,6 +424,18 @@ const positionStatusText = computed(() => {
     return positionError.value
   }
 
+  if (!user.value && localDraftError.value) {
+    return localDraftError.value
+  }
+
+  if (pendingAnonymousDraftCodes.value.length > 0) {
+    const stockNames = pendingAnonymousDraftCodes.value
+      .map((code) => STOCKS.find((stock) => stock.code === code)?.name)
+      .filter((name) => name !== undefined)
+
+    return `${stockNames.join('、')} 保留了登录前的本地录入，尚未保存到当前账号；请确认后点击保存`
+  }
+
   if (positionMessage.value) {
     return positionMessage.value
   }
@@ -407,7 +444,7 @@ const positionStatusText = computed(() => {
     return `当前账号：${user.value.username}`
   }
 
-  return '未登录时仅在当前页面暂存输入'
+  return '未登录输入仅保存在当前浏览器'
 })
 
 const customTargetSummary = computed(() => {
@@ -423,12 +460,12 @@ const customTargetSummary = computed(() => {
 
 const positionSummaryText = computed(
   () =>
-    `当前按 ${activePosition.value.quantity} 股、成本 ${formatCurrency(activePosition.value.costPrice)}、自定义目标 ${customTargetSummary.value} 推演`,
+    `基准日原始数据：${activePosition.value.quantity} 股、成本 ${formatCurrency(activePosition.value.costPrice)}；自定义目标 ${customTargetSummary.value}`,
 )
 
 const positionAutoSummaryText = computed(
   () =>
-    `${positionSummaryText.value}；基准日 ${activePosition.value.basisDate}，送转后按 ${formatShareQuantity(adjustedPosition.value.quantity)} 股推演`,
+    `${positionSummaryText.value}；日期 ${activePosition.value.basisDate}，送转后按 ${formatShareQuantity(adjustedPosition.value.quantity)} 股推演`,
 )
 
 const corporateActionSummaryText = computed(() => {
@@ -504,9 +541,17 @@ watch(selectedScenarioTargets, () => {
   persistLocalState()
 })
 
-watch([customTargetMode, dividendTaxBracket, targetProfitWan], () => {
+watch([customTargetMode, targetProfitWan], () => {
   persistLocalState()
 })
+
+watch(
+  dividendTaxBrackets,
+  () => {
+    persistLocalState()
+  },
+  { deep: true },
+)
 
 watch(
   targetMarketCaps,
@@ -544,6 +589,9 @@ watch(
 onMounted(() => {
   restoreLocalState()
   localStateReady = true
+  if (persistLocalState()) {
+    window.localStorage.removeItem(LEGACY_LOCAL_STATE_KEY)
+  }
   void loadQuotes()
   void loadDividends()
   void restoreSession()
@@ -591,10 +639,50 @@ function createPositionDrafts() {
   )
 }
 
-function resetPositionDrafts() {
+function createDividendTaxBracketMap() {
+  return STOCKS.reduce(
+    (all, stock) => {
+      all[stock.code] = 'over-1y'
+      return all
+    },
+    {} as Record<StockCode, DividendTaxBracketKey>,
+  )
+}
+
+function setPositionDrafts(nextDrafts: Record<StockCode, PositionDraft>) {
   for (const stock of STOCKS) {
-    positionDrafts[stock.code] = { ...defaultPosition, basisDate: todayDateValue() }
+    positionDrafts[stock.code] = { ...nextDrafts[stock.code] }
   }
+}
+
+function beginSessionTransition() {
+  positionLoadSequence += 1
+  positionsPending.value = false
+  positionSavePending.value = false
+  saveAllPending.value = false
+  return sessionEpoch.begin()
+}
+
+function isCurrentAuthenticatedSession(epoch: number, userId: string) {
+  return sessionEpoch.isCurrent(epoch) && user.value?.id === userId
+}
+
+function positionDraftsMatch(left: PositionDraft, right: PositionDraft) {
+  return (
+    left.quantity === right.quantity && left.costPrice === right.costPrice && left.basisDate === right.basisDate
+  )
+}
+
+function captureAnonymousDraftSnapshot() {
+  anonymousDraftSnapshot = clonePositionDrafts(
+    STOCKS.map((stock) => stock.code),
+    positionDrafts,
+  )
+}
+
+function restoreAnonymousDraftSnapshot() {
+  pendingAnonymousDraftCodes.value = []
+  setPositionDrafts(anonymousDraftSnapshot)
 }
 
 function openAuth(mode: AuthMode) {
@@ -656,17 +744,15 @@ function ensureCustomTargetSelected() {
 }
 
 function todayDateValue() {
-  const now = new Date()
-  const localDate = new Date(now.getTime() - now.getTimezoneOffset() * 60_000)
-  return localDate.toISOString().slice(0, 10)
+  return getChinaDateString()
 }
 
 function normalizeDateValue(value: unknown, fallbackValue = todayDateValue()) {
-  if (typeof value !== 'string') {
+  if (typeof value !== 'string' || !isValidBasisDate(value, todayDateValue())) {
     return fallbackValue
   }
 
-  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : fallbackValue
+  return value
 }
 
 function dateFromIsoValue(value: unknown, fallbackValue = todayDateValue()) {
@@ -674,32 +760,66 @@ function dateFromIsoValue(value: unknown, fallbackValue = todayDateValue()) {
     return fallbackValue
   }
 
-  return normalizeDateValue(value.slice(0, 10), fallbackValue)
+  const parsedDate = new Date(value)
+
+  if (!Number.isFinite(parsedDate.getTime())) {
+    return fallbackValue
+  }
+
+  return normalizeDateValue(getChinaDateString(parsedDate), fallbackValue)
 }
 
-function normalizeDraftValue(value: unknown, fallbackValue: number) {
+function normalizeDraftValue(value: unknown, fallbackValue: number, maximumValue = Number.MAX_VALUE) {
   const numericValue = typeof value === 'number' ? value : Number(value)
 
-  if (!Number.isFinite(numericValue) || numericValue < 0) {
+  if (!Number.isFinite(numericValue) || numericValue < 0 || numericValue > maximumValue) {
     return fallbackValue
   }
 
   return numericValue
 }
 
-function restoreSavedQuantity(savedDraft: Partial<PositionDraft>) {
-  const savedQuantity = normalizeDraftValue(savedDraft.quantity, defaultPosition.quantity)
-  const savedCostPrice = normalizeDraftValue(savedDraft.costPrice, defaultPosition.costPrice)
+function restoreSavedPositionDraft(savedDraft: Partial<PositionDraft>): PositionDraft {
+  const savedQuantity = normalizeDraftValue(
+    savedDraft.quantity,
+    defaultPosition.quantity,
+    MAX_POSITION_QUANTITY,
+  )
+  const savedCostPrice = normalizeDraftValue(
+    savedDraft.costPrice,
+    defaultPosition.costPrice,
+    MAX_POSITION_COST_PRICE,
+  )
+  const isLegacyDemoValue =
+    savedCostPrice === legacyDefaultPosition.costPrice &&
+    (savedQuantity === legacyDefaultPosition.quantity || savedQuantity === defaultPosition.quantity)
 
-  if (savedQuantity === legacyDefaultPosition.quantity && savedCostPrice === legacyDefaultPosition.costPrice) {
-    return defaultPosition.quantity
+  if (isLegacyDemoValue) {
+    return { ...defaultPosition, basisDate: normalizeDateValue(savedDraft.basisDate, defaultPosition.basisDate) }
   }
 
-  return Math.trunc(savedQuantity)
+  return {
+    quantity: Math.trunc(savedQuantity),
+    costPrice: savedCostPrice,
+    basisDate: normalizeDateValue(savedDraft.basisDate, defaultPosition.basisDate),
+  }
 }
 
 function restoreLocalState() {
-  const rawState = window.localStorage.getItem(LOCAL_STATE_KEY)
+  let sourceKey = LOCAL_STATE_KEY
+  let rawState: string | null = null
+
+  try {
+    rawState = window.localStorage.getItem(LOCAL_STATE_KEY)
+
+    if (!rawState) {
+      sourceKey = LEGACY_LOCAL_STATE_KEY
+      rawState = window.localStorage.getItem(LEGACY_LOCAL_STATE_KEY)
+    }
+  } catch {
+    localDraftError.value = '当前浏览器无法读取本地草稿，请勿在未登录状态下依赖本地保存'
+    return
+  }
 
   if (!rawState) {
     return
@@ -720,8 +840,12 @@ function restoreLocalState() {
       customTargetMode.value = parsedState.customTargetMode
     }
 
-    if (isDividendTaxBracketKey(parsedState.dividendTaxBracket)) {
-      dividendTaxBracket.value = parsedState.dividendTaxBracket
+    for (const stock of STOCKS) {
+      const savedBracket = parsedState.dividendTaxBrackets?.[stock.code] ?? parsedState.dividendTaxBracket
+
+      if (isDividendTaxBracketKey(savedBracket)) {
+        dividendTaxBrackets[stock.code] = savedBracket
+      }
     }
 
     if (typeof parsedState.targetProfitWan === 'string') {
@@ -748,38 +872,47 @@ function restoreLocalState() {
           continue
         }
 
-        positionDrafts[stock.code] = {
-          quantity: restoreSavedQuantity(savedDraft),
-          costPrice: normalizeDraftValue(savedDraft.costPrice, defaultPosition.costPrice),
-          basisDate: normalizeDateValue(savedDraft.basisDate, defaultPosition.basisDate),
-        }
+        positionDrafts[stock.code] = restoreSavedPositionDraft(savedDraft)
       }
     }
 
+    captureAnonymousDraftSnapshot()
     ensureCustomTargetSelected()
   } catch {
-    window.localStorage.removeItem(LOCAL_STATE_KEY)
+    window.localStorage.removeItem(sourceKey)
   }
 }
 
 function persistLocalState() {
   if (!localStateReady) {
-    return
+    return false
+  }
+
+  if (!user.value) {
+    captureAnonymousDraftSnapshot()
   }
 
   const nextState: PersistedAppState = {
+    stateVersion: LOCAL_STATE_VERSION,
+    positionDraftScope: 'anonymous',
     selectedCode: selectedCode.value,
     customMarketCap: customMarketCap.value,
     customTargetMode: customTargetMode.value,
-    dividendTaxBracket: dividendTaxBracket.value,
+    dividendTaxBrackets: STOCKS.reduce(
+      (all, stock) => {
+        all[stock.code] = dividendTaxBrackets[stock.code]
+        return all
+      },
+      {} as Partial<Record<StockCode, string>>,
+    ),
     targetProfitWan: targetProfitWan.value,
     selectedScenarioTargets: selectedScenarioTargets.value,
     positionDrafts: STOCKS.reduce(
       (all, stock) => {
         all[stock.code] = {
-          quantity: positionDrafts[stock.code].quantity,
-          costPrice: positionDrafts[stock.code].costPrice,
-          basisDate: positionDrafts[stock.code].basisDate,
+          quantity: anonymousDraftSnapshot[stock.code].quantity,
+          costPrice: anonymousDraftSnapshot[stock.code].costPrice,
+          basisDate: anonymousDraftSnapshot[stock.code].basisDate,
         }
         return all
       },
@@ -787,7 +920,14 @@ function persistLocalState() {
     ),
   }
 
-  window.localStorage.setItem(LOCAL_STATE_KEY, JSON.stringify(nextState))
+  try {
+    window.localStorage.setItem(LOCAL_STATE_KEY, JSON.stringify(nextState))
+    localDraftError.value = ''
+    return true
+  } catch {
+    localDraftError.value = '本地草稿保存失败，请登录后保存持仓，或暂时不要关闭当前页面'
+    return false
+  }
 }
 
 function normalizeQuote(payload: QuotePayload) {
@@ -918,6 +1058,8 @@ async function loadDividends() {
 }
 
 async function restoreSession() {
+  const requestEpoch = beginSessionTransition()
+
   try {
     const response = await fetch('/api/auth/me', {
       headers: {
@@ -927,6 +1069,10 @@ async function restoreSession() {
     })
 
     const payload = (await readJsonResponse(response)) as { user?: UserSummary } | null
+
+    if (!sessionEpoch.isCurrent(requestEpoch)) {
+      return
+    }
 
     if (response.status === 401) {
       user.value = null
@@ -938,20 +1084,30 @@ async function restoreSession() {
       throw new Error(readApiError(payload, '登录状态恢复失败'))
     }
 
+    captureAnonymousDraftSnapshot()
+    persistLocalState()
     user.value = payload.user
     authError.value = ''
-    await loadPositions()
+    await loadPositions(requestEpoch)
   } catch (error) {
+    if (!sessionEpoch.isCurrent(requestEpoch)) {
+      return
+    }
+
     user.value = null
     authError.value = readUnknownError(error, '登录状态恢复失败')
   }
 }
 
-async function loadPositions() {
-  if (!user.value) {
-    return
+async function loadPositions(requestEpoch = sessionEpoch.capture()) {
+  const requestUser = user.value
+
+  if (!requestUser || !isCurrentAuthenticatedSession(requestEpoch, requestUser.id)) {
+    return false
   }
 
+  const requestUserId = requestUser.id
+  const requestSequence = ++positionLoadSequence
   positionsPending.value = true
   positionError.value = ''
 
@@ -959,62 +1115,99 @@ async function loadPositions() {
     const response = await fetch('/api/positions', {
       headers: {
         Accept: 'application/json',
+        'X-Expected-User-Id': requestUserId,
       },
       credentials: 'same-origin',
     })
 
     const payload = (await readJsonResponse(response)) as { positions?: PositionPayload[] } | null
 
+    if (
+      requestSequence !== positionLoadSequence ||
+      !isCurrentAuthenticatedSession(requestEpoch, requestUserId)
+    ) {
+      return false
+    }
+
     if (response.status === 401) {
-      user.value = null
-      resetPositionDrafts()
-      positionMessage.value = ''
-      positionError.value = '登录状态已失效，请重新登录'
-      return
+      handleExpiredSession()
+      return false
+    }
+
+    if (response.status === 409) {
+      handleExpiredSession(SESSION_CHANGED_MESSAGE)
+      return false
     }
 
     if (!response.ok) {
       throw new Error(readApiError(payload, '持仓加载失败'))
     }
 
-    // Merge instead of overwrite: keep nonzero local drafts for stocks the
-    // account has no saved position for, so pre-login input survives login.
-    const savedCodes = new Set<StockCode>()
+    const savedPositions: Partial<Record<StockCode, PositionDraft>> = {}
 
     for (const savedPosition of payload?.positions ?? []) {
-      if (!isStockCode(savedPosition.stockCode)) {
+      if (savedPosition.userId !== requestUserId || !isStockCode(savedPosition.stockCode)) {
         continue
       }
 
-      savedCodes.add(savedPosition.stockCode)
-      positionDrafts[savedPosition.stockCode] = {
-        quantity: savedPosition.quantity,
-        costPrice: savedPosition.costPrice,
+      savedPositions[savedPosition.stockCode] = {
+        quantity: Math.trunc(
+          normalizeDraftValue(savedPosition.quantity, defaultPosition.quantity, MAX_POSITION_QUANTITY),
+        ),
+        costPrice: normalizeDraftValue(
+          savedPosition.costPrice,
+          defaultPosition.costPrice,
+          MAX_POSITION_COST_PRICE,
+        ),
         basisDate: normalizeDateValue(savedPosition.basisDate, dateFromIsoValue(savedPosition.updatedAt)),
       }
     }
 
-    const unsavedDraftCodes = STOCKS.filter(
-      (stock) => !savedCodes.has(stock.code) && positionDrafts[stock.code].quantity > 0,
+    const mergedState = mergeAnonymousDraftsWithSavedPositions(
+      STOCKS.map((stock) => stock.code),
+      anonymousDraftSnapshot,
+      savedPositions,
     )
 
-    positionMessage.value =
-      unsavedDraftCodes.length > 0
-        ? `已同步账号持仓；${unsavedDraftCodes.map((stock) => stock.name).join('、')} 的本地录入尚未保存到账号，请确认后点击保存`
-        : '已同步账号持仓'
+    setPositionDrafts(mergedState.drafts)
+    pendingAnonymousDraftCodes.value = mergedState.pendingStockCodes
+
+    for (const stockCode of mergedState.matchedStockCodes) {
+      anonymousDraftSnapshot[stockCode] = { ...defaultPosition, basisDate: todayDateValue() }
+    }
+
+    persistLocalState()
+    positionMessage.value = '已同步账号持仓'
+    return true
   } catch (error) {
-    positionError.value = readUnknownError(error, '持仓加载失败')
+    if (
+      requestSequence === positionLoadSequence &&
+      isCurrentAuthenticatedSession(requestEpoch, requestUserId)
+    ) {
+      positionError.value = readUnknownError(error, '持仓加载失败')
+    }
+
+    return false
   } finally {
-    positionsPending.value = false
+    if (
+      requestSequence === positionLoadSequence &&
+      isCurrentAuthenticatedSession(requestEpoch, requestUserId)
+    ) {
+      positionsPending.value = false
+    }
   }
 }
 
 async function submitAuth() {
+  const submittedAuthMode = authMode.value
+  captureAnonymousDraftSnapshot()
+  persistLocalState()
+  const requestEpoch = beginSessionTransition()
   authPending.value = true
   authError.value = ''
 
   try {
-    const response = await fetch(authMode.value === 'login' ? '/api/auth/login' : '/api/auth/register', {
+    const response = await fetch(submittedAuthMode === 'login' ? '/api/auth/login' : '/api/auth/register', {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -1029,129 +1222,296 @@ async function submitAuth() {
 
     const payload = (await readJsonResponse(response)) as { user?: UserSummary } | null
 
+    if (!sessionEpoch.isCurrent(requestEpoch)) {
+      return
+    }
+
     if (!response.ok || !payload?.user) {
       throw new Error(readApiError(payload, '登录失败'))
     }
 
     user.value = payload.user
     closeAuthDialog()
-    await loadPositions()
-    positionMessage.value = authMode.value === 'register' ? '注册成功，已自动登录' : '登录成功，已同步持仓'
+    await loadPositions(requestEpoch)
+
+    if (!sessionEpoch.isCurrent(requestEpoch)) {
+      return
+    }
+
+    if (user.value && !positionError.value && pendingAnonymousDraftCodes.value.length === 0) {
+      positionMessage.value = submittedAuthMode === 'register' ? '注册成功，已自动登录并同步持仓' : '登录成功，已同步持仓'
+    }
   } catch (error) {
-    authError.value = readUnknownError(error, '提交失败')
+    if (sessionEpoch.isCurrent(requestEpoch)) {
+      authError.value = readUnknownError(error, '提交失败')
+    }
   } finally {
-    authPending.value = false
+    if (sessionEpoch.isCurrent(requestEpoch)) {
+      authPending.value = false
+    }
   }
 }
 
 async function logout() {
   logoutPending.value = true
+  authPending.value = false
   authError.value = ''
+  const requestEpoch = beginSessionTransition()
 
   try {
     const response = await fetch('/api/auth/logout', {
       method: 'POST',
       headers: {
         Accept: 'application/json',
+        'Content-Type': 'application/json',
       },
       credentials: 'same-origin',
+      body: '{}',
     })
 
     const payload = await readJsonResponse(response)
+
+    if (!sessionEpoch.isCurrent(requestEpoch)) {
+      return
+    }
 
     if (!response.ok) {
       throw new Error(readApiError(payload, '退出登录失败'))
     }
 
     user.value = null
-    resetPositionDrafts()
+    restoreAnonymousDraftSnapshot()
     positionMessage.value = '已退出登录'
     positionError.value = ''
+    persistLocalState()
   } catch (error) {
-    authError.value = readUnknownError(error, '退出登录失败')
+    if (sessionEpoch.isCurrent(requestEpoch)) {
+      authError.value = readUnknownError(error, '退出登录失败')
+    }
   } finally {
-    logoutPending.value = false
+    if (sessionEpoch.isCurrent(requestEpoch)) {
+      logoutPending.value = false
+    }
   }
 }
 
 async function saveActivePosition() {
-  if (!user.value) {
+  const requestUser = user.value
+
+  if (!requestUser) {
     openAuth('login')
     return
   }
 
+  if (logoutPending.value) {
+    return
+  }
+
+  const stockCode = selectedCode.value
+  const stockName = activeStock.value.name
+  const validationError = getPositionValidationError(stockCode)
+
+  if (validationError) {
+    positionMessage.value = ''
+    positionError.value = validationError
+    return
+  }
+
+  const requestEpoch = sessionEpoch.capture()
+  const requestUserId = requestUser.id
   positionSavePending.value = true
   positionError.value = ''
 
   try {
-    await savePosition(selectedCode.value)
+    const result = await savePosition(stockCode, requestEpoch, requestUserId)
 
-    positionMessage.value = `${activeStock.value.name} 持仓已保存`
+    if (!isCurrentAuthenticatedSession(requestEpoch, requestUserId) || result === 'stale-session') {
+      return
+    }
+
+    if (result === 'changed-after-submit') {
+      positionMessage.value = `${stockName} 已保存提交时的数据；当前输入有新修改，请再次保存`
+      return
+    }
+
+    positionMessage.value = `${stockName} 持仓已保存`
     positionEditorOpen.value = false
   } catch (error) {
-    positionError.value = readUnknownError(error, '持仓保存失败')
+    if (isCurrentAuthenticatedSession(requestEpoch, requestUserId)) {
+      positionError.value = readUnknownError(error, '持仓保存失败')
+    }
   } finally {
-    positionSavePending.value = false
+    if (isCurrentAuthenticatedSession(requestEpoch, requestUserId)) {
+      positionSavePending.value = false
+    }
   }
 }
 
 async function saveAllPositions() {
-  if (!user.value) {
+  const requestUser = user.value
+
+  if (!requestUser) {
     openAuth('login')
     return
   }
 
+  if (logoutPending.value) {
+    return
+  }
+
+  for (const stock of STOCKS) {
+    const validationError = getPositionValidationError(stock.code)
+
+    if (validationError) {
+      positionMessage.value = ''
+      positionError.value = `${stock.name}：${validationError}`
+      return
+    }
+  }
+
+  const requestEpoch = sessionEpoch.capture()
+  const requestUserId = requestUser.id
+  const submittedDrafts = clonePositionDrafts(
+    STOCKS.map((stock) => stock.code),
+    positionDrafts,
+  )
   saveAllPending.value = true
   positionError.value = ''
 
   try {
     for (const stock of STOCKS) {
-      await savePosition(stock.code)
+      const result = await savePosition(stock.code, requestEpoch, requestUserId, submittedDrafts[stock.code])
+
+      if (!isCurrentAuthenticatedSession(requestEpoch, requestUserId) || result === 'stale-session') {
+        return
+      }
+
+      if (result === 'changed-after-submit') {
+        positionMessage.value = `${stock.name} 已保存提交时的数据；当前输入有新修改，请再次保存`
+        return
+      }
+    }
+
+    const changedStock = STOCKS.find(
+      (stock) => !positionDraftsMatch(positionDrafts[stock.code], submittedDrafts[stock.code]),
+    )
+
+    if (changedStock) {
+      positionMessage.value = `${changedStock.name} 已保存提交时的数据；当前输入有新修改，请再次保存`
+      return
     }
 
     positionMessage.value = '两只股票持仓已全部保存'
     positionEditorOpen.value = false
   } catch (error) {
-    positionError.value = readUnknownError(error, '批量保存失败')
+    if (isCurrentAuthenticatedSession(requestEpoch, requestUserId)) {
+      positionError.value = readUnknownError(error, '批量保存失败')
+    }
   } finally {
-    saveAllPending.value = false
+    if (isCurrentAuthenticatedSession(requestEpoch, requestUserId)) {
+      saveAllPending.value = false
+    }
   }
 }
 
-async function savePosition(stockCode: StockCode) {
-  const draft = positionDrafts[stockCode]
+async function savePosition(
+  stockCode: StockCode,
+  requestEpoch: number,
+  requestUserId: string,
+  submittedDraft: PositionDraft = { ...positionDrafts[stockCode] },
+): Promise<SavePositionResult> {
+  const validationError = validatePositionDraft(submittedDraft, todayDateValue())
+
+  if (validationError) {
+    throw new Error(validationError)
+  }
+
   const response = await fetch('/api/positions', {
     method: 'PUT',
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
+      'X-Expected-User-Id': requestUserId,
     },
     credentials: 'same-origin',
     body: JSON.stringify({
       stockCode,
-      quantity: draft.quantity,
-      costPrice: draft.costPrice,
-      basisDate: draft.basisDate,
+      quantity: submittedDraft.quantity,
+      costPrice: submittedDraft.costPrice,
+      basisDate: submittedDraft.basisDate,
     }),
   })
 
   const payload = (await readJsonResponse(response)) as { position?: PositionPayload } | null
 
+  if (!isCurrentAuthenticatedSession(requestEpoch, requestUserId)) {
+    return 'stale-session'
+  }
+
   if (response.status === 401) {
-    user.value = null
-    throw new Error('登录状态已失效，请重新登录')
+    handleExpiredSession()
+    throw new Error(SESSION_EXPIRED_MESSAGE)
+  }
+
+  if (response.status === 409) {
+    handleExpiredSession(SESSION_CHANGED_MESSAGE)
+    throw new Error(SESSION_CHANGED_MESSAGE)
   }
 
   if (!response.ok) {
     throw new Error(readApiError(payload, '持仓保存失败'))
   }
-  if (payload?.position && isStockCode(payload.position.stockCode)) {
-    positionDrafts[payload.position.stockCode] = {
-      quantity: payload.position.quantity,
-      costPrice: payload.position.costPrice,
-      basisDate: normalizeDateValue(payload.position.basisDate, dateFromIsoValue(payload.position.updatedAt)),
-    }
+
+  if (
+    !payload?.position ||
+    payload.position.userId !== requestUserId ||
+    payload.position.stockCode !== stockCode
+  ) {
+    throw new Error('服务器未返回有效的持仓保存结果，请刷新后确认')
   }
+
+  if (!positionDraftsMatch(positionDrafts[stockCode], submittedDraft)) {
+    return 'changed-after-submit'
+  }
+
+  positionDrafts[stockCode] = {
+    quantity: Math.trunc(
+      normalizeDraftValue(payload.position.quantity, submittedDraft.quantity, MAX_POSITION_QUANTITY),
+    ),
+    costPrice: normalizeDraftValue(
+      payload.position.costPrice,
+      submittedDraft.costPrice,
+      MAX_POSITION_COST_PRICE,
+    ),
+    basisDate: normalizeDateValue(payload.position.basisDate, dateFromIsoValue(payload.position.updatedAt)),
+  }
+
+  clearSyncedAnonymousDraft(stockCode)
+  return 'saved'
+}
+
+function getPositionValidationError(stockCode: StockCode) {
+  return validatePositionDraft(positionDrafts[stockCode], todayDateValue())
+}
+
+function handleExpiredSession(message = SESSION_EXPIRED_MESSAGE) {
+  beginSessionTransition()
+  authPending.value = false
+  user.value = null
+  restoreAnonymousDraftSnapshot()
+  positionMessage.value = ''
+  positionError.value = message
+  persistLocalState()
+}
+
+function clearSyncedAnonymousDraft(stockCode: StockCode) {
+  if (!pendingAnonymousDraftCodes.value.includes(stockCode)) {
+    return
+  }
+
+  anonymousDraftSnapshot[stockCode] = { ...defaultPosition, basisDate: todayDateValue() }
+  pendingAnonymousDraftCodes.value = pendingAnonymousDraftCodes.value.filter((code) => code !== stockCode)
+  persistLocalState()
 }
 
 </script>
@@ -1243,13 +1603,26 @@ async function savePosition(stockCode: StockCode) {
             class="ghost-button position-toggle-button"
             type="button"
             :aria-expanded="positionEditorOpen"
+            aria-controls="position-editor-panel"
             @click="togglePositionEditor"
           >
             {{ positionEditorOpen ? '收起持仓录入' : '录入 / 修改持仓' }}
           </button>
         </div>
 
-        <p :class="['status-text', 'position-status', { 'is-negative': positionError }]">{{ positionStatusText }}</p>
+        <p
+          id="position-status"
+          :class="[
+            'status-text',
+            'position-status',
+            { 'is-negative': positionError || (!user && localDraftError) },
+          ]"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {{ positionStatusText }}
+        </p>
 
         <div class="corporate-action-summary">
           <p :class="['status-text', { 'is-negative': dividendsError || dividendFreshness === 'fallback' }]">
@@ -1258,26 +1631,38 @@ async function savePosition(stockCode: StockCode) {
           <strong>{{ corporateActionSummaryText }}</strong>
         </div>
 
-        <div v-if="positionEditorOpen" class="position-editor-panel">
+        <div v-if="positionEditorOpen" id="position-editor-panel" class="position-editor-panel">
+          <p id="position-input-guidance" class="position-input-guidance">
+            请填写持仓基准日当天、尚未计入该日后分红送转的原始数量与成本价。若填写券商当前已送转或已摊薄的数据，会造成重复计算。
+          </p>
+
           <div class="form-grid">
             <label>
-              <span>持仓数量</span>
+              <span>基准日原始持仓数量</span>
               <input
                 v-model.number="positionDrafts[selectedCode].quantity"
                 type="number"
                 min="0"
-                step="100"
+                :max="MAX_POSITION_QUANTITY"
+                step="1"
+                :disabled="positionsPending || positionSavePending || saveAllPending || logoutPending"
+                aria-describedby="position-input-guidance position-status"
+                required
                 @input="clearPositionFeedback"
               />
             </label>
 
             <label>
-              <span>成本价</span>
+              <span>基准日原始成本价</span>
               <input
                 v-model.number="positionDrafts[selectedCode].costPrice"
                 type="number"
                 min="0"
-                step="0.01"
+                :max="MAX_POSITION_COST_PRICE"
+                step="0.0001"
+                :disabled="positionsPending || positionSavePending || saveAllPending || logoutPending"
+                aria-describedby="position-input-guidance position-status"
+                required
                 @input="clearPositionFeedback"
               />
             </label>
@@ -1287,13 +1672,17 @@ async function savePosition(stockCode: StockCode) {
               <input
                 v-model="positionDrafts[selectedCode].basisDate"
                 type="date"
+                :max="todayDateValue()"
+                :disabled="positionsPending || positionSavePending || saveAllPending || logoutPending"
+                aria-describedby="position-input-guidance position-status"
+                required
                 @input="clearPositionFeedback"
               />
             </label>
 
             <label>
               <span>红利税档位（按持股期限）</span>
-              <select v-model="dividendTaxBracket">
+              <select v-model="activeDividendTaxBracket" aria-describedby="position-input-guidance">
                 <option v-for="bracket in DIVIDEND_TAX_BRACKETS" :key="bracket.key" :value="bracket.key">
                   {{ bracket.label }} · {{ bracket.rate > 0 ? `${bracket.rate * 100}%` : '免税' }}
                 </option>
@@ -1314,7 +1703,7 @@ async function savePosition(stockCode: StockCode) {
               v-if="user"
               class="primary-button"
               type="button"
-              :disabled="positionsPending || positionSavePending || saveAllPending"
+              :disabled="positionsPending || positionSavePending || saveAllPending || logoutPending"
               @click="saveActivePosition"
             >
               {{ positionSavePending ? '保存中...' : `保存 ${activeStock.name} 持仓` }}
@@ -1324,7 +1713,7 @@ async function savePosition(stockCode: StockCode) {
               v-if="user"
               class="ghost-button"
               type="button"
-              :disabled="positionsPending || positionSavePending || saveAllPending"
+              :disabled="positionsPending || positionSavePending || saveAllPending || logoutPending"
               @click="saveAllPositions"
             >
               {{ saveAllPending ? '批量保存中...' : '保存全部持仓' }}
@@ -1367,7 +1756,11 @@ async function savePosition(stockCode: StockCode) {
           </article>
           <article class="note-item">
             <strong>口径</strong>
-            <p>目标市值输入使用万亿元，展示会在亿元和万亿元之间自动切换，未来推演按总市值计算。</p>
+            <p>持仓输入采用基准日当天的原始数量与成本价；目标市值输入使用万亿元，未来推演按总市值计算。</p>
+          </article>
+          <article class="note-item">
+            <strong>公司行动</strong>
+            <p>推演只应用基准日后已实施的分红送转，不假设未来未公告的公司行动；配股需要额外出资，不自动按已认购计算。</p>
           </article>
           <article class="note-item">
             <strong>税费</strong>

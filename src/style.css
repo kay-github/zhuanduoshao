@@ -549,6 +549,17 @@ button {
   gap: 16px;
 }
 
+.position-input-guidance {
+  margin: 0;
+  padding: 12px 14px;
+  border-left: 3px solid rgba(113, 144, 255, 0.72);
+  color: #c7d3ee;
+  background: rgba(113, 144, 255, 0.08);
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
 .position-editor-copy h4 {
   margin: 8px 0 6px;
   font-size: 20px;
@@ -970,6 +981,18 @@ tbody tr:hover {
 
 .is-negative {
   color: #ff7d9c;
+}
+
+.is-up {
+  color: #ff7d9c;
+}
+
+.is-down {
+  color: #21d7ba;
+}
+
+.is-flat {
+  color: #dce5ff;
 }
 
 @media (min-width: 768px) {

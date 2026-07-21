@@ -1,4 +1,8 @@
 export function formatCurrency(value: number, withUnit = true) {
+  if (!Number.isFinite(value)) {
+    return '--'
+  }
+
   const result = new Intl.NumberFormat('zh-CN', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -29,6 +33,10 @@ export function formatChinaDateTime(value: string) {
 }
 
 export function formatShareQuantity(value: number) {
+  if (!Number.isFinite(value)) {
+    return '--'
+  }
+
   return new Intl.NumberFormat('zh-CN', {
     minimumFractionDigits: 0,
     maximumFractionDigits: 2,
@@ -36,6 +44,10 @@ export function formatShareQuantity(value: number) {
 }
 
 export function formatPlainNumber(value: number, maximumFractionDigits: number) {
+  if (!Number.isFinite(value)) {
+    return ''
+  }
+
   return new Intl.NumberFormat('zh-CN', {
     useGrouping: false,
     minimumFractionDigits: 0,
@@ -52,6 +64,10 @@ export function formatMarketCapFromYuan(value: number) {
 }
 
 export function formatYiUnit(value: number) {
+  if (!Number.isFinite(value)) {
+    return '--'
+  }
+
   const usesWanYi = value >= 10_000
   const displayValue = usesWanYi ? value / 10_000 : value
   const maximumFractionDigits = usesWanYi ? 2 : Number.isInteger(value) ? 0 : 1
@@ -63,9 +79,25 @@ export function formatYiUnit(value: number) {
 }
 
 export function formatPercent(value: number) {
+  if (!Number.isFinite(value)) {
+    return '--'
+  }
+
   return `${value >= 0 ? '+' : ''}${(value * 100).toFixed(2)}%`
 }
 
 export function profitClass(value: number) {
-  return value >= 0 ? 'is-positive' : 'is-negative'
+  if (!Number.isFinite(value)) {
+    return 'is-flat'
+  }
+
+  if (value > 0) {
+    return 'is-up'
+  }
+
+  if (value < 0) {
+    return 'is-down'
+  }
+
+  return 'is-flat'
 }

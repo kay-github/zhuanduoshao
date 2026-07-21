@@ -1,16 +1,17 @@
 # HANDOFF
 
-Last updated: 2026-07-18
+Last updated: 2026-07-21
 
 ## Key Progress Memory
 
+- 2026-07-21 hardening round: auth configuration is validated before writes; bcrypt passwords are capped at 72 UTF-8 bytes; auth mutations require JSON; malformed cookies no longer cause 500s; stale `/api/auth/me` responses cannot clear a newer session; frontend session epochs and `X-Expected-User-Id` protect logout/account-switch and multi-tab races; save-all uses fixed draft snapshots; position payloads use shared strict numeric validation; save responses safely re-read missing or driver-shaped rows; anonymous drafts use a versioned local-storage scope and China-calendar dates; only explicitly implemented corporate actions affect returns; quote/dividend persistence is isolated per stock; quote snapshots/history update monotonically by `quote_as_of`; provider and snapshot validation is strict; smoke scripts now assert valid live data instead of only printing it. Full check: 20 files / 140 tests.
 - 2026-07-19: share-card export shipped. `src/lib/share-card.ts` builds pure card data (unit-tested), `src/lib/share-card-renderer.ts` renders a 2x canvas PNG and prefers the Web Share API (mobile) with download fallback. Entry points: a share button on every mobile scenario card and a 分享 column in the desktop table. Verified with headless Chromium at 390px: no horizontal overflow, PNG renders correctly with profit headline, metric panel, and disclaimer.
 - 2026-07-18 hardening round: fallback quotes refreshed to live values (AGENTS.md documents the ~30% drift refresh rule), auth rate limiting now failure-only for login (50/10min, testable factory + unit tests), `quote_history` table (migration 0003, pushed to production) captures one row per stock per trade date via upsert during trading hours.
 - 2026-07-18 product round implemented on top of the quote-hardening refactor: draft-merge on login, dividend tax brackets, reverse projection (target profit → required price/market cap), custom target price-input mode, trading-session auto-refresh, auth rate limiting, disclaimer/tax notes, per-stock `getQuote` freshness, CI dedup.
-- IMPORTANT deployment gate: uncommitted migration `drizzle/0002_cooing_joystick.sql` adds `quote_snapshots.quote_as_of`. Run `npm run db:push -- --force` against production BEFORE deploying this code, otherwise `readSnapshotQuotes()` selects a missing column and the snapshot fallback chain silently breaks (same failure class as the 2026-07-10 `basis_date` incident).
+- Migrations through `drizzle/0003_colossal_ronan.sql` were previously applied and the current database contract was re-verified on 2026-07-21 with `npm run db:verify`, including column types/precision/nullability/defaults, primary keys, unique indexes, and foreign keys for all five tables.
 - Corporate-action automation for existing holdings is implemented end-to-end in the codebase: provider service, `/api/dividends`, persisted snapshots, `basisDate` on positions, frontend loading, and UI-side adjusted profit/projection calculations.
 - Provider strategy is settled for MVP: prefer Tushare Pro when `TUSHARE_TOKEN` is configured, fall back to Eastmoney public `RPT_SHAREBONUS_DET`, treat malformed/empty provider payloads as source failures, then reuse the latest `dividend_snapshots`, then fall back to empty corporate-action records.
-- Quote strategy is also hardened: Eastmoney + Tencent + Sina public quote providers, strict field validation with `validateLiveQuoteFields`, persisted `quote_snapshots` (now with `quote_as_of`), and built-in fallback quote data only as the final fallback.
+- Quote strategy is also hardened: Eastmoney + Tencent + Sina public quote providers, strict field validation with `validateLiveQuoteFields`, persisted `quote_snapshots` (with monotonic `quote_as_of` updates shared by snapshot/history persistence), and built-in fallback quote data only as the final fallback. A newer stored snapshot wins over an older live response.
 - Calculation rule treats `quantity * costPrice` as original cost; applies implemented cash dividend, bonus share, and transfer records where `exDate > basisDate` and `exDate <= today`; adjusts effective quantity by share ratios; deducts dividend tax by the user-selected holding-period bracket; adds after-tax cash dividends to total return; excludes rights issues by default.
 - Tushare account/token cannot be created or configured automatically without user-owned credentials, but the app is already token-ready through `TUSHARE_TOKEN`.
 
@@ -19,7 +20,7 @@ Last updated: 2026-07-18
 Project name:
 - `赚多少`
 
-Current state (2026-07-18):
+Current state (2026-07-21):
 - Frontend `TypeScript + Vue 3 + Vite`, split into `AppHeader` / `QuotePanel` / `ScenarioProjectionPanel` components with pure calculation logic in `src/lib/portfolio-calculations.ts` (vitest-covered)
 - Backend `Vercel Functions + PostgreSQL + Drizzle`, quote/dividend services with multi-provider + snapshot fallback
 - New this round (all implemented, verified by `npm run check`):
@@ -29,10 +30,16 @@ Current state (2026-07-18):
   - Reverse projection: input a target total profit (`万元`) → required price, distance from current price, implied total market cap
   - Custom target supports market-cap (`万亿`) and price-per-share (`元`) input modes, converted through the live cap/price ratio
   - Quotes auto-refresh every 30s during A-share trading sessions while the page is visible; session state shown in the quote header
-  - `login`/`register` rate limited per IP (20 attempts / 10 min, instance memory)
+  - Login is rate limited by IP and username; registration is rate limited by IP (50 failures/attempts per 10 min depending on endpoint, instance memory)
+  - Login/register/logout require JSON requests; `/api/auth/me` no longer clears the cookie on 401
+  - Session epochs prevent stale authenticated loads/saves from mutating state after logout or account switching
+  - Position GET/PUT send `X-Expected-User-Id`; missing or mismatched account context returns 409 before any database access
+  - Save-all captures both stock drafts at start, disables position editing while pending, and rechecks the session before reporting success
+  - Position decimal validation is shared by frontend/backend and accepts at most four cost-price decimals without exponent-rounding gaps
+  - Quote snapshot/history persistence is monotonic by `quote_as_of`, and newer persisted data takes priority over an older live response
   - Notes card includes dividend-tax explanation and investment disclaimer; register dialog warns passwords cannot be recovered
   - `getQuote` reports per-stock freshness via `freshnessByCode`; CI no longer double-runs typechecks
-- NOT yet done: production `db:push` for migration 0002, commit/deploy of this working tree, live smoke tests (`listQuotes`/`listDividends`), 390px visual check of the new scenario controls
+- Current working tree contains the 2026-07-21 hardening changes and is not yet committed or deployed. Live no-persist market-data smoke, database contract verification, full build/tests, and 390px overflow checks have passed. A real-account browser E2E was intentionally not run because the available local environment points at a persistent database.
 
 ## What Is Already Done
 
@@ -58,6 +65,8 @@ Current state (2026-07-18):
 - Frontend loads saved positions from `/api/positions`
 - Logged-in users can save the current stock position with `PUT /api/positions`
 - Logged-in users can save both fixed-stock positions in one action
+- Authenticated position loads and saves are bound to a session epoch and expected user ID, preventing stale requests from crossing account changes
+- Saving both positions uses immutable start-of-save drafts and temporarily disables all position inputs
 - `PUT /api/positions` falls back to a post-write lookup if the database driver does not return the saved row from `.returning()`
 - Position drafts now include `basisDate`, used as the starting date for automatic corporate-action adjustment
 - Default position drafts start with `0` shares; users must enter a quantity before the app treats them as holding shares
@@ -68,13 +77,13 @@ Current state (2026-07-18):
 - Original cost amount = `quantity * costPrice`
 - Implemented dividends/bonus shares/transfers with `exDate > basisDate` and `exDate <= today` are automatically applied
 - Effective quantity is adjusted by bonus/transfer ratios
-- Cash dividend amount is added to total return
+- After-tax cash dividend amount is added to total return
 - Current holding value = `effective quantity * latestPrice`
-- Current profit = `current holding value + cash dividend amount - original cost amount`
+- Current profit = `current holding value + after-tax cash dividend amount - original cost amount`
 - Current profit rate = `current profit / original cost amount`
 - Future target price = `latestPrice * targetMarketCap / currentTotalMarketCap`
 - Future target holding value = `effective quantity * targetPrice`
-- Total future profit = `target holding value + cash dividend amount - original cost amount`
+- Total future profit = `target holding value + after-tax cash dividend amount - original cost amount`
 - Additional profit from now = `target holding value - current holding value`
 
 Default target market caps:
@@ -106,6 +115,8 @@ Default target market caps:
 - `lib/server/quote-service.ts` now fetches real quotes from Eastmoney, Tencent, and Sina public quote sources
 - The quote service merges providers per stock and uses provider order to fill missing fields/stocks
 - Successful live quotes are persisted into `quote_snapshots` in PostgreSQL
+- Snapshot and daily history rows only accept updates whose `quote_as_of` is at least as new as the stored row
+- The service re-reads persisted snapshots after live persistence so a concurrent newer snapshot can supersede an older provider response
 - If live sources fail, quote service falls back to the latest successful snapshot before using built-in demo quote data
 - Quote fetches use a short timeout and in-memory cache to reduce repeated third-party calls
 
@@ -124,6 +135,7 @@ Default target market caps:
 - API responses now use plain `res.end()` JSON output instead of framework helper chaining
 - API handlers now catch unexpected runtime/config errors and return JSON error payloads instead of generic crashes
 - Database initialization is lazy so quote-only endpoints do not fail just because DB env vars are missing
+- Database verification checks the full five-table contract, including exact defaults and usable non-partial/non-expression primary and unique indexes plus foreign keys
 
 ### Auth Design Implemented
 
@@ -131,6 +143,9 @@ Default target market caps:
 - HttpOnly cookie session
 - JWT session token via `jose`
 - Password hashing via `bcryptjs`
+- Login, registration, and logout accept JSON requests only
+- `/api/auth/me` treats 401 as an observation and does not clear a possibly newer session cookie
+- Position access requires the client-declared expected user ID to match the cookie session
 
 ### Database Foundation
 
@@ -145,6 +160,7 @@ Tables currently designed:
 - `positions`
 - `quote_snapshots`
 - `dividend_snapshots`
+- `quote_history`
 
 Current positions rule:
 - One current position per user per stock
@@ -152,16 +168,24 @@ Current positions rule:
 
 ## Verified So Far
 
-Commands that passed:
+2026-07-21 working-tree checks:
+- `npm run check` (20 test files / 140 tests, frontend and server typechecks, Vite production build, Drizzle migration check)
+- `npm run smoke:data:no-persist` (both stocks live through Tencent quotes and Eastmoney corporate actions; persistence disabled)
+- `npm run db:verify` (all 5 application tables match column type/precision/nullability/default, primary-key, unique-index, and foreign-key contracts)
+- `npm audit --omit=dev` (0 vulnerabilities)
+- `npm audit` (7 high + 7 moderate findings, all in the development toolchain; the suggested automatic fix requires inappropriate major-version changes)
+- `git diff --check`
+
+Additional 2026-07-21 UI verification:
+- Chrome at a `390x844` viewport had no horizontal overflow; stock drafts/tax brackets stayed independent and custom price-target mode worked.
+- A real-account auth/position browser E2E and a multi-tab account-switch browser E2E were intentionally not run because the available environment points at a persistent database.
+
+Historical production/runtime checks (not rerun as part of the 2026-07-21 working-tree verification):
+- `npx tsx -e "import { listQuotes } from './lib/server/quote-service.ts'; (async () => { const quotes = await listQuotes(); console.log(JSON.stringify(quotes, null, 2)); })();"`
 - `npm run build`
 - `npm run typecheck:server`
 - `npm run db:generate`
 - `npm run db:push -- --force`
-
-Additional runtime smoke check that passed:
-- `npx tsx -e "import { listQuotes } from './lib/server/quote-service.ts'; (async () => { const quotes = await listQuotes(); console.log(JSON.stringify(quotes, null, 2)); })();"`
-- `npm run build`
-- `npm run typecheck:server`
 - Production smoke test passed for `POST /api/auth/register`, `GET /api/auth/me`, `PUT /api/positions`, `GET /api/positions`
 - Production `GET /api/quotes` now returns `freshness` and `source`, and was verified to return live quote data
 - `npx tsx -e "import { listDividends } from './lib/server/dividend-service.ts'; (async () => { const feed = await listDividends(); console.log(JSON.stringify({ freshness: feed.freshness, source: feed.source, counts: feed.dividends.map((item) => ({ code: item.code, records: item.records.length, latest: item.records[0] })) }, null, 2)); })().catch((error) => { console.error(error); process.exit(1); });"`
@@ -231,14 +255,31 @@ Current UI:
 
 Shared stock definitions:
 - `shared/stocks.ts`
+- `shared/numeric.ts`
+
+Frontend state helpers:
+- `src/lib/position-draft-state.ts`
+- `src/lib/session-epoch.ts`
 
 Server helpers:
 - `lib/server/db.ts`
 - `lib/server/schema.ts`
 - `lib/server/auth.ts`
+- `lib/server/auth-input.ts`
+- `lib/server/errors.ts`
 - `lib/server/http.ts`
+- `lib/server/rate-limit.ts`
+- `lib/server/position-input.ts`
+- `lib/server/write-result.ts`
+- `lib/server/market-data-persistence.ts`
 - `lib/server/quote-service.ts`
 - `lib/server/dividend-service.ts`
+
+Operational scripts:
+- `scripts/runtime-env.ts`
+- `scripts/smoke-market-data.ts`
+- `scripts/verify-database-schema.ts`
+- `scripts/audit-quote-history.ts`
 
 API routes:
 - `api/auth/register.ts`
@@ -253,21 +294,24 @@ Database files:
 - `drizzle.config.ts`
 - `drizzle/0000_pretty_malice.sql`
 - `drizzle/0001_plain_chronomancer.sql`
+- `drizzle/0002_cooing_joystick.sql`
+- `drizzle/0003_colossal_ronan.sql`
 
 ## Recommended Next Steps
 
-### Priority 1 (deployment gate) — DONE 2026-07-18
+### Priority 1
 
-- `npm run db:push -- --force` applied migration 0002 (`quote_snapshots.quote_as_of`) to production and the column was verified via information_schema
-- Working tree committed (`c032be7`, plus `f6d6a4a` adding an explicit `@types/pg` devDependency after the first Vercel build failed its server typecheck on the transitively-resolved type package) and pushed; Vercel production deployment is Ready
-- Post-deploy verification passed: `/api/quotes` returned live data with `asOf`/`fetchedAt`, `/api/quotes?code=300308` returned per-stock freshness, `/api/dividends` returned live Eastmoney records, `/api/auth/me` returned 401 as expected, homepage served, and production `quote_snapshots` rows contain populated `quote_as_of`
+- Review, commit, and deploy the 2026-07-21 working tree.
+- Before deployment, run `npm run db:verify` against the target environment. No new migration is required by this hardening round.
+- After deployment, smoke `/api/quotes`, `/api/dividends`, `/api/auth/me`, and one account-scoped position save/read flow.
 
-### Priority 2 (verification of this round)
+### Priority 2
 
-- 390px mobile visual check: scenario mode switch, reverse projection cards, tax bracket select, no horizontal overflow
-- Live smoke: `listQuotes()` and `listDividends()`
-- E2E through `vercel dev`: register with a nonzero local draft present and confirm the draft survives and the unsaved-draft prompt appears; check 429 after >20 rapid login attempts
-- Verify dividend tax: pick a basisDate before 300502's 2026-06-11 ex-date, switch brackets, confirm cash dividend and profit change accordingly
+- Run a real-account E2E in an isolated/test database: preserve a nonzero anonymous draft across registration/login, explicitly save it, reload, and verify logout restores only the anonymous draft scope.
+- Run a two-tab account-switch E2E and confirm the stale tab gets 409 without reading or writing the newly active account.
+- Add Vue component-level coverage for stale session responses/save races, a matching expected-user success path, and compiled monotonic-upsert SQL.
+- Exercise 429 behavior separately for login IP, login username, and registration IP namespaces. The limiter remains a per-instance serverless soft cap and concurrent requests can still race before failed attempts are recorded.
+- Verify dividend tax interactively with a basis date before a known implemented ex-date and switch all three tax brackets.
 
 ### Priority 3
 

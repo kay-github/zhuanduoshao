@@ -14,9 +14,14 @@
     "typecheck": "vue-tsc -b",
     "typecheck:server": "tsc -p tsconfig.server.json",
     "test": "vitest run",
-    "check": "npm run test && npm run build",
+    "check": "npm run test && npm run build && npm run db:check",
     "db:generate": "drizzle-kit generate",
+    "db:check": "drizzle-kit check",
     "db:push": "drizzle-kit push",
+    "db:verify": "tsx scripts/verify-database-schema.ts",
+    "db:audit:quote-history": "tsx scripts/audit-quote-history.ts",
+    "smoke:data": "tsx scripts/smoke-market-data.ts",
+    "smoke:data:no-persist": "tsx scripts/smoke-market-data.ts --no-persist",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -35,6 +40,7 @@
     "@vitejs/plugin-vue": "^6.0.5",
     "@vue/tsconfig": "^0.9.1",
     "drizzle-kit": "^0.31.10",
+    "tsx": "^4.21.0",
     "typescript": "~6.0.2",
     "vite": "^8.0.4",
     "vitest": "^4.1.10",

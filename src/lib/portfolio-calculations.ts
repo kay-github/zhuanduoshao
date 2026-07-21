@@ -117,7 +117,7 @@ export function adjustPositionForCorporateActions<TAction extends CorporateActio
       continue
     }
 
-    if (record.planProgress && !record.planProgress.includes('实施')) {
+    if (typeof record.planProgress !== 'string' || !record.planProgress.includes('实施')) {
       continue
     }
 

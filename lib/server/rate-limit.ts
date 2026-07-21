@@ -6,6 +6,14 @@ const WINDOW_MS = 10 * 60 * 1000
 const MAX_FAILURES_PER_WINDOW = 50
 const MAX_TRACKED_KEYS = 10_000
 
+export const AUTH_RATE_LIMIT_NAMESPACES = {
+  loginIp: 'login-ip',
+  loginUsername: 'login-username',
+  registerIp: 'register-ip',
+} as const
+
+type AuthRateLimitNamespace = (typeof AUTH_RATE_LIMIT_NAMESPACES)[keyof typeof AUTH_RATE_LIMIT_NAMESPACES]
+
 interface RateWindow {
   count: number
   resetAt: number
@@ -24,20 +32,23 @@ export function createRateLimiter(
   maxFailures = MAX_FAILURES_PER_WINDOW,
   windowMs = WINDOW_MS,
   now: () => number = Date.now,
+  maxTrackedKeys = MAX_TRACKED_KEYS,
 ): RateLimiter {
   const windows = new Map<string, RateWindow>()
+  const trackedKeyLimit = Math.max(0, Math.floor(maxTrackedKeys))
 
-  function readWindow(key: string) {
+  function readWindow(key: string, currentMs: number) {
     const window = windows.get(key)
-    return window && now() < window.resetAt ? window : null
-  }
 
-  function pruneExpired() {
-    if (windows.size <= MAX_TRACKED_KEYS) {
-      return
+    if (!window || currentMs < window.resetAt) {
+      return window ?? null
     }
 
-    const currentMs = now()
+    windows.delete(key)
+    return null
+  }
+
+  function pruneExpired(currentMs: number) {
     for (const [existingKey, existingWindow] of windows) {
       if (currentMs >= existingWindow.resetAt) {
         windows.delete(existingKey)
@@ -45,26 +56,52 @@ export function createRateLimiter(
     }
   }
 
+  function makeRoomForNewKey(currentMs: number) {
+    if (trackedKeyLimit === 0) {
+      return false
+    }
+
+    if (windows.size >= trackedKeyLimit) {
+      pruneExpired(currentMs)
+    }
+
+    if (windows.size >= trackedKeyLimit) {
+      const oldestKey = windows.keys().next().value
+
+      if (oldestKey !== undefined) {
+        windows.delete(oldestKey)
+      }
+    }
+
+    return true
+  }
+
   return {
     isLimited(key) {
-      const window = readWindow(key)
+      const window = readWindow(key, now())
       return window !== null && window.count >= maxFailures
     },
     recordFailure(key) {
-      const window = readWindow(key)
+      const currentMs = now()
+      const window = readWindow(key, currentMs)
 
       if (window) {
         window.count += 1
         return
       }
 
-      pruneExpired()
-      windows.set(key, { count: 1, resetAt: now() + windowMs })
+      if (makeRoomForNewKey(currentMs)) {
+        windows.set(key, { count: 1, resetAt: currentMs + windowMs })
+      }
     },
     reset(key) {
       windows.delete(key)
     },
   }
+}
+
+export function buildAuthRateLimitKey(namespace: AuthRateLimitNamespace, identifier: string) {
+  return `${namespace}:${identifier}`
 }
 
 export function readClientIp(req: VercelRequest) {

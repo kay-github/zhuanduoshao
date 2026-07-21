@@ -15,7 +15,7 @@ Current confirmed scope:
 
 ## Current Phase
 
-UI has entered refinement and backend foundation can start in parallel.
+UI and backend foundations are in place. The current focus is refinement, hardening, and deployment verification.
 
 UI priority:
 - Mobile web first
@@ -42,6 +42,10 @@ Confirmed decisions:
 - Each user stores one current position per stock in MVP
 - Use HttpOnly cookie session in MVP
 - Unauthenticated users may keep temporary position drafts in local browser storage
+- Login, registration, and logout mutations must require `application/json`; do not accept form-compatible requests that can bypass the intended same-origin JSON flow
+- A stale `/api/auth/me` 401 response must not clear the session cookie because it may race with a newer successful login
+- `AUTH_SECRET` must be at least 32 characters, must not be an example/placeholder value, and must be validated before account creation writes
+- Passwords must be at least 6 characters and no more than 72 UTF-8 bytes because bcrypt ignores bytes beyond that boundary
 
 Out of scope for MVP unless explicitly added:
 - Complex profile system
@@ -69,6 +73,9 @@ Important note:
 - Free public APIs may be usable for MVP, but they do not guarantee exchange-grade SLA or long-term stability.
 - The code should keep data-source coupling low.
 - Always smoke-test quote providers through `listQuotes()` after changing providers, fields, request headers, or fallback logic.
+- Live quote/corporate-action rows and persisted snapshots must pass strict field validation before they are marked live or replace last-good data.
+- Quote snapshot and history upserts must be monotonic by `quote_as_of`; an older live response must never overwrite or outrank a newer persisted quote.
+- `npm run smoke:data:no-persist` must fail unless both configured stocks return valid live quotes and non-empty live corporate-action histories.
 - Do not remove quote/dividend snapshot fallback just because a public source works locally once.
 - Built-in fallback quotes in `shared/stocks.ts` must be refreshed from live data when the stock universe changes or after large market moves (rough rule: whenever the fallback price drifts more than ~30% from reality); keep fallback `priceChangePct` at `0`.
 
@@ -122,8 +129,13 @@ Default target total market cap list in MVP:
 - Treat mobile as the primary layout; after mobile UI changes, verify around 390px width and check that the document has no horizontal overflow.
 - Keep target market-cap UI input in `万亿元`, but keep internal scenario calculations normalized to the existing `亿元` target values unless the whole calculation model is intentionally migrated.
 - Quotes auto-refresh every 30s only during A-share trading sessions (09:30-11:30, 13:00-15:00 China time, weekdays) and only while the page is visible; holidays are not modeled.
+- Dates used for A-share calculation boundaries and default position basis dates must use the China calendar date on both frontend and backend.
 - Login/register must never wipe nonzero unauthenticated drafts: merge server positions over drafts and prompt the user to save unsaved local input, instead of resetting first.
+- Frontend authenticated requests must be tied to the current session epoch so responses from a previous login, logout, or account switch cannot update current state.
+- Authenticated position requests must send `X-Expected-User-Id`; the API must reject a missing or mismatched account context before accessing the database.
+- A save-all operation must capture both drafts at the start, prevent position editing while it runs, and revalidate the session before reporting success.
 - Auth endpoints are rate limited per IP in instance memory (soft cap, serverless-local); keep the limiter dependency-free.
+- Position save payloads must use real JSON numbers, stay within the shared storage-safe bounds, use at most four cost-price decimals, and require a positive cost price for a nonzero holding.
 - The notes card must keep the investment disclaimer and the dividend-tax explanation; the register dialog must mention that passwords cannot be recovered.
 - For save endpoints, avoid reporting a generic failure after a successful write; if a write succeeds but the returned row is missing or driver-shaped differently, perform a safe post-write lookup before responding.
 - Update this `AGENTS.md` whenever product rules, architecture choices, or major decisions change.

@@ -8,6 +8,17 @@ export function json(res: VercelResponse, status: number, body: unknown) {
   return res.end(JSON.stringify(body))
 }
 
+export function setNoStore(res: VercelResponse) {
+  res.setHeader('Cache-Control', 'no-store')
+}
+
+export function hasJsonContentType(req: VercelRequest) {
+  const contentType = req.headers['content-type']
+  const value = Array.isArray(contentType) ? contentType[0] : contentType
+
+  return value?.split(';', 1)[0]?.trim().toLowerCase() === 'application/json'
+}
+
 export function methodNotAllowed(res: VercelResponse, allowedMethods: string[]) {
   res.setHeader('Allow', allowedMethods.join(', '))
   return json(res, 405, { error: '请求方法不支持' })
@@ -60,7 +71,13 @@ export function parseCookies(req: VercelRequest) {
       return all
     }
 
-    all[rawKey] = decodeURIComponent(rawValue.join('='))
+    try {
+      all[rawKey] = decodeURIComponent(rawValue.join('='))
+    } catch {
+      // Ignore a malformed cookie instead of turning an invalid session into
+      // an internal server error. Other well-formed cookies remain usable.
+    }
+
     return all
   }, {})
 }

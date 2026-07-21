@@ -13,7 +13,7 @@
 - A 股交易时段内每 30 秒自动刷新行情，并显示交易时段状态
 - 保存每个账号在两只股票上的独立持仓
 - 未登录时将持仓草稿保存在当前浏览器；登录后合并同步，不会覆盖未保存的本地录入
-- 自动应用基准日之后、当前日期之前已实施的分红送转
+- 自动应用基准日之后、截至当前日期已实施的分红送转
 - 现金分红按所选持股期限档位扣减红利税（超 1 年免税、1 个月-1 年 10%、不足 1 个月 20%）
 - 使用预设目标总市值或自定义目标进行收益情景推演；自定义目标支持按市值（万亿元）或按股价（元）输入
 - 反向推演：输入目标总收益（万元），反推所需股价、距离现价涨幅和对应总市值
@@ -69,7 +69,7 @@ npx vercel env pull .env.local
 | 变量 | 必填 | 用途 |
 | --- | --- | --- |
 | `POSTGRES_URL` | 是 | PostgreSQL 连接字符串；也兼容 Vercel 集成生成的 `*_POSTGRES_URL` / `*_DATABASE_URL` |
-| `AUTH_SECRET` | 是 | 签发账号会话的高强度随机密钥 |
+| `AUTH_SECRET` | 是 | 签发账号会话的高强度随机密钥；至少 32 个字符，不能使用示例占位值 |
 | `TUSHARE_TOKEN` | 否 | 配置后优先使用 Tushare Pro 获取分红送转；留空时使用东方财富 |
 
 请勿提交真实密钥或包含凭据的连接字符串。
@@ -83,12 +83,13 @@ npm run check
 git diff --check
 ```
 
-修改行情或公司行动适配器后，还应分别执行实时冒烟检查：
+修改行情或公司行动适配器后，执行不会写数据库的实时冒烟检查。该命令会校验两只股票均返回有效 live 数据，否则以非零状态退出：
 
 ```bash
-npx tsx -e "import { listQuotes } from './lib/server/quote-service.ts'; listQuotes().then(console.log)"
-npx tsx -e "import { listDividends } from './lib/server/dividend-service.ts'; listDividends().then(console.log)"
+npm run smoke:data:no-persist
 ```
+
+部署前可用目标环境变量执行 `npm run db:verify`，确认 5 张应用表的字段类型、精度、可空性、默认值、主键、唯一索引和外键均符合代码契约。`npm run db:audit:quote-history` 用于只读检查行情历史日期是否异常。
 
 涉及页面布局时，应额外检查约 `390px` 宽视口，并确认页面没有横向溢出。涉及认证、数据库或持仓接口时，应通过 `vercel dev` 或已部署环境验证注册、登录、保存、刷新恢复和退出流程。
 
@@ -97,7 +98,7 @@ npx tsx -e "import { listDividends } from './lib/server/dividend-service.ts'; li
 项目按 Vercel 前端与 Functions 同仓部署设计：
 
 1. 在 Vercel 项目中配置 `POSTGRES_URL`、`AUTH_SECRET`，按需配置 `TUSHARE_TOKEN`。
-2. 使用生产数据库环境变量执行 `npm run db:push -- --force`，确保数据库结构与代码一致。
+2. 使用生产数据库环境变量执行 `npm run db:push -- --force`，再执行 `npm run db:verify`，确保数据库结构与代码一致。
 3. 执行 `npx vercel --prod`，或由已连接的 Git 分支触发生产部署。
 4. 部署后检查 `/api/quotes`、`/api/dividends`、`/api/auth/me`，并完成一次持仓保存与恢复。
 
@@ -109,7 +110,7 @@ npx tsx -e "import { listDividends } from './lib/server/dividend-service.ts'; li
 - 行情服务按股票合并多个供应商结果；实时源失败时使用数据库中的最近成功快照，最后才使用内置回退值。
 - 公司行动优先使用已配置的 Tushare Pro，否则使用东方财富；源异常时使用最近快照，最后按无公司行动记录处理。
 - 页面会显示当前数据状态。缓存或内置回退适合估算，不应视为交易依据。
-- 推演结果未计入税费、交易费用、未来增减仓以及尚未实施的公司行动。
+- 除所选红利税外，推演结果未计入其他税费、交易费用、未来增减仓以及尚未实施的公司行动。
 
 ## 目录
 

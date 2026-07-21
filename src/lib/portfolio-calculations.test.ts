@@ -74,7 +74,7 @@ describe('adjustPositionForCorporateActions', () => {
         ...action('rights-only', { exDate: '2024-02-02' }),
         rightsIssueRatio: 10,
       },
-      action('valid-with-empty-progress', {
+      action('missing-progress', {
         exDate: '2024-02-03',
         planProgress: '',
         cashDividendRatio: 10,
@@ -88,8 +88,8 @@ describe('adjustPositionForCorporateActions', () => {
     )
 
     expect(result.quantity).toBe(100)
-    expect(result.cashDividendAmount).toBe(100)
-    expect(result.appliedActions.map(({ id }) => id)).toEqual(['valid-with-empty-progress'])
+    expect(result.cashDividendAmount).toBe(0)
+    expect(result.appliedActions).toEqual([])
   })
 
   it('rounds each sequential adjustment and never returns a negative adjusted cost', () => {

@@ -1,42 +1,62 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { eq } from 'drizzle-orm'
-import { z } from 'zod'
 
 import { createSessionToken, setSessionCookie, verifyPassword } from '../../lib/server/auth.js'
+import { loginInputSchema } from '../../lib/server/auth-input.js'
 import { getDb } from '../../lib/server/db.js'
-import { json, methodNotAllowed, readJsonBody, handleApiError } from '../../lib/server/http.js'
-import { authRateLimiter, readClientIp } from '../../lib/server/rate-limit.js'
+import {
+  json,
+  methodNotAllowed,
+  readJsonBody,
+  handleApiError,
+  hasJsonContentType,
+  setNoStore,
+} from '../../lib/server/http.js'
+import {
+  AUTH_RATE_LIMIT_NAMESPACES,
+  authRateLimiter,
+  buildAuthRateLimitKey,
+  readClientIp,
+} from '../../lib/server/rate-limit.js'
 import { users } from '../../lib/server/schema.js'
 
-const loginSchema = z.object({
-  username: z.string().trim().min(3).max(24),
-  password: z.string().min(6).max(72),
-})
-
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  setNoStore(res)
+
   try {
     if (req.method !== 'POST') {
       return methodNotAllowed(res, ['POST'])
     }
 
+    if (!hasJsonContentType(req)) {
+      return json(res, 415, { error: '请求必须使用 application/json' })
+    }
+
     // Only failed logins count toward the limit, so shared-exit IPs are not
     // starved by legitimate successful traffic.
-    const clientIp = readClientIp(req)
+    const clientIpKey = buildAuthRateLimitKey(AUTH_RATE_LIMIT_NAMESPACES.loginIp, readClientIp(req))
 
-    if (authRateLimiter.isLimited(clientIp)) {
+    if (authRateLimiter.isLimited(clientIpKey)) {
       return json(res, 429, { error: '尝试过于频繁，请稍后再试' })
     }
 
     const db = getDb()
 
-    const parsedBody = loginSchema.safeParse(readJsonBody(req))
+    const parsedBody = loginInputSchema.safeParse(readJsonBody(req))
 
     if (!parsedBody.success) {
-      authRateLimiter.recordFailure(clientIp)
+      authRateLimiter.recordFailure(clientIpKey)
       return json(res, 400, { error: '用户名或密码格式不正确' })
     }
 
     const username = parsedBody.data.username.toLowerCase()
+    const usernameKey = buildAuthRateLimitKey(AUTH_RATE_LIMIT_NAMESPACES.loginUsername, username)
+
+    if (authRateLimiter.isLimited(usernameKey)) {
+      authRateLimiter.recordFailure(clientIpKey)
+      return json(res, 429, { error: '尝试过于频繁，请稍后再试' })
+    }
+
     const [user] = await db
       .select({
         id: users.id,
@@ -48,18 +68,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .limit(1)
 
     if (!user) {
-      authRateLimiter.recordFailure(clientIp)
+      authRateLimiter.recordFailure(clientIpKey)
+      authRateLimiter.recordFailure(usernameKey)
       return json(res, 401, { error: '用户名或密码错误' })
     }
 
     const passwordMatched = await verifyPassword(parsedBody.data.password, user.passwordHash)
 
     if (!passwordMatched) {
-      authRateLimiter.recordFailure(clientIp)
+      authRateLimiter.recordFailure(clientIpKey)
+      authRateLimiter.recordFailure(usernameKey)
       return json(res, 401, { error: '用户名或密码错误' })
     }
 
-    authRateLimiter.reset(clientIp)
+    // A valid account may clear its own budget, but must never erase the
+    // shared IP history because that would let an attacker reset it at will.
+    authRateLimiter.reset(usernameKey)
 
     const token = await createSessionToken({ userId: user.id, username: user.username })
     setSessionCookie(res, token)

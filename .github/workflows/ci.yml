@@ -25,9 +25,5 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run unit tests
-        run: npm test
-
-      # Build already runs both typechecks (see package.json "build").
-      - name: Build production bundle
-        run: npm run build
+      - name: Run project checks
+        run: npm run check

@@ -1,6 +1,7 @@
-import { asc } from 'drizzle-orm'
+import { asc, sql } from 'drizzle-orm'
 
 import { getDb } from './db.js'
+import { forEachBestEffort, isMarketDataPersistenceDisabled } from './market-data-persistence.js'
 import { quoteHistory, quoteSnapshots } from './schema.js'
 import {
   STOCKS,
@@ -16,13 +17,14 @@ const EASTMONEY_QUOTE_FIELDS = 'f2,f3,f12,f20,f124'
 const TENCENT_QUOTE_API_URL = 'https://qt.gtimg.cn/q='
 const SINA_QUOTE_API_URL = 'https://hq.sinajs.cn/list='
 const QUOTE_CACHE_TTL_MS = 15_000
+const QUOTE_DEGRADED_CACHE_TTL_MS = 30_000
 const QUOTE_TIMEOUT_MS = 5_000
 const MAX_LIVE_QUOTE_AGE_MS = 14 * 24 * 60 * 60 * 1000
 const MAX_PROVIDER_CLOCK_SKEW_MS = 10 * 60 * 1000
 const CHINA_TIME_OFFSET_MS = 8 * 60 * 60 * 1000
 
 export type QuoteFreshness = 'live' | 'snapshot' | 'fallback'
-type QuoteSource = '东方财富' | '腾讯行情' | '新浪行情'
+export type QuoteSource = '东方财富' | '腾讯行情' | '新浪行情'
 
 interface EastmoneyQuoteRow {
   f2?: unknown
@@ -38,7 +40,7 @@ interface EastmoneyQuoteResponse {
   }
 }
 
-interface ProviderQuoteCandidate {
+export interface ProviderQuoteCandidate {
   code: StockCode
   source: QuoteSource
   latestPrice: number | null
@@ -47,7 +49,7 @@ interface ProviderQuoteCandidate {
   asOf: string | null
 }
 
-interface ProviderQuote {
+export interface ProviderQuote {
   quote: StockQuote
   source: string
 }
@@ -74,6 +76,14 @@ export interface ValidatedLiveQuoteFields {
   totalMarketCap: number
   priceChangePct: number
   asOf: string
+}
+
+export interface SnapshotQuoteFieldsInput extends LiveQuoteFieldsInput {
+  fetchedAt: unknown
+}
+
+export interface ValidatedSnapshotQuoteFields extends ValidatedLiveQuoteFields {
+  fetchedAt: string
 }
 
 let cachedQuoteFeed: QuoteFeed | null = null
@@ -170,6 +180,36 @@ export function validateLiveQuoteFields(
   }
 }
 
+export function validateSnapshotQuoteFields(
+  input: SnapshotQuoteFieldsInput,
+): ValidatedSnapshotQuoteFields | null {
+  const latestPrice = toPositiveFiniteNumber(input.latestPrice)
+  const totalMarketCap = toPositiveFiniteNumber(input.totalMarketCap)
+  const priceChangePct = toFiniteNumber(input.priceChangePct)
+  const asOf = normalizeTimestamp(input.asOf)
+  const fetchedAt = normalizeTimestamp(input.fetchedAt)
+
+  if (
+    latestPrice === null ||
+    totalMarketCap === null ||
+    priceChangePct === null ||
+    priceChangePct < -100 ||
+    priceChangePct > 1_000 ||
+    !asOf ||
+    !fetchedAt
+  ) {
+    return null
+  }
+
+  return {
+    latestPrice,
+    totalMarketCap: Math.round(totalMarketCap),
+    priceChangePct,
+    asOf,
+    fetchedAt,
+  }
+}
+
 function chinaDateTimeToIso(
   year: number,
   month: number,
@@ -240,6 +280,12 @@ function summarizeSources(sources: Iterable<string>) {
   return uniqueSources.length > 0 ? uniqueSources.join(' + ') : '未知来源'
 }
 
+function warnSnapshotFailure(operation: string, error: unknown, stockCode?: string) {
+  const errorType = error instanceof Error ? error.name : 'UnknownError'
+  const stockContext = stockCode ? ` for stock ${stockCode}` : ''
+  console.warn(`[quote-service] ${operation}${stockContext} failed (${errorType})`)
+}
+
 function mapEastmoneyQuote(row: EastmoneyQuoteRow): ProviderQuoteCandidate | null {
   const code = typeof row.f12 === 'string' ? row.f12 : null
 
@@ -293,29 +339,75 @@ function mapSinaQuote(code: StockCode, fields: string[]): ProviderQuoteCandidate
   }
 }
 
-function buildValidatedProviderQuote(
+export function buildValidatedProviderQuote(
   code: StockCode,
   candidates: ProviderQuoteCandidate[],
   nowMs: number,
 ): ProviderQuote | null {
   const stock = getStockByCode(code)
 
-  // Price fields and total market cap may come from two different providers
-  // (e.g. Sina price + Tencent market cap). Their asOf timestamps can then
-  // differ by seconds; that skew is accepted, and the reported asOf is the one
-  // from the price provider since price is the primary display field.
-  for (const marketCandidate of candidates) {
-    for (const marketCapCandidate of candidates) {
-      if (!normalizeLiveAsOf(marketCapCandidate.asOf, nowMs)) {
-        continue
-      }
+  const timestampedCandidates = candidates
+    .filter((candidate) => candidate.code === code)
+    .map((candidate) => {
+      const asOf = normalizeLiveAsOf(candidate.asOf, nowMs)
+      return asOf ? { candidate, asOf, timestampMs: Date.parse(asOf) } : null
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null)
 
+  const priceCandidates = timestampedCandidates
+    .filter(({ candidate }) => {
+      const latestPrice = toPositiveFiniteNumber(candidate.latestPrice)
+      const priceChangePct = toFiniteNumber(candidate.priceChangePct)
+      return (
+        latestPrice !== null &&
+        priceChangePct !== null &&
+        priceChangePct >= -100 &&
+        priceChangePct <= 1_000
+      )
+    })
+    .sort((left, right) => right.timestampMs - left.timestampMs)
+
+  const freshestPriceTimestamp = priceCandidates[0]?.timestampMs
+
+  if (freshestPriceTimestamp === undefined) {
+    return null
+  }
+
+  // A recent price must never be completed with a market cap from a different
+  // trading window. Older complete quotes are also ignored when a materially
+  // fresher price candidate proves that the provider set has moved on.
+  for (const priceCandidate of priceCandidates) {
+    if (freshestPriceTimestamp - priceCandidate.timestampMs > MAX_PROVIDER_CLOCK_SKEW_MS) {
+      continue
+    }
+
+    const compatibleMarketCaps = timestampedCandidates
+      .filter(
+        ({ candidate, timestampMs }) =>
+          toPositiveFiniteNumber(candidate.totalMarketCap) !== null &&
+          Math.abs(timestampMs - priceCandidate.timestampMs) <= MAX_PROVIDER_CLOCK_SKEW_MS,
+      )
+      .sort((left, right) => {
+        const leftSameSource = left.candidate.source === priceCandidate.candidate.source ? 1 : 0
+        const rightSameSource = right.candidate.source === priceCandidate.candidate.source ? 1 : 0
+
+        if (leftSameSource !== rightSameSource) {
+          return rightSameSource - leftSameSource
+        }
+
+        return (
+          Math.abs(left.timestampMs - priceCandidate.timestampMs) -
+          Math.abs(right.timestampMs - priceCandidate.timestampMs)
+        )
+      })
+
+    for (const marketCapCandidate of compatibleMarketCaps) {
       const validatedFields = validateLiveQuoteFields(
         {
-          latestPrice: marketCandidate.latestPrice,
-          totalMarketCap: marketCapCandidate.totalMarketCap,
-          priceChangePct: marketCandidate.priceChangePct,
-          asOf: marketCandidate.asOf,
+          latestPrice: priceCandidate.candidate.latestPrice,
+          totalMarketCap: marketCapCandidate.candidate.totalMarketCap,
+          priceChangePct: priceCandidate.candidate.priceChangePct,
+          asOf: priceCandidate.asOf,
         },
         nowMs,
       )
@@ -325,7 +417,7 @@ function buildValidatedProviderQuote(
       }
 
       return {
-        source: summarizeSources([marketCandidate.source, marketCapCandidate.source]),
+        source: summarizeSources([priceCandidate.candidate.source, marketCapCandidate.candidate.source]),
         quote: {
           code: stock.code,
           name: stock.name,
@@ -342,6 +434,23 @@ function buildValidatedProviderQuote(
   }
 
   return null
+}
+
+export function getChinaTradeDate(asOf: unknown) {
+  const normalizedAsOf = normalizeTimestamp(asOf)
+
+  if (!normalizedAsOf) {
+    return null
+  }
+
+  const chinaTime = new Date(Date.parse(normalizedAsOf) + CHINA_TIME_OFFSET_MS)
+  const chinaWeekday = chinaTime.getUTCDay()
+
+  if (chinaWeekday === 0 || chinaWeekday === 6) {
+    return null
+  }
+
+  return chinaTime.toISOString().slice(0, 10)
 }
 
 async function fetchTextWithTimeout(url: string) {
@@ -479,27 +588,46 @@ async function fetchLiveProviderQuotes() {
 }
 
 async function persistQuoteSnapshots(providerQuotes: ProviderQuote[]) {
-  if (providerQuotes.length === 0) {
+  if (providerQuotes.length === 0 || isMarketDataPersistenceDisabled()) {
     return
   }
 
+  const validationNowMs = Date.now()
+  const persistableQuotes = providerQuotes.flatMap((providerQuote) => {
+    const validatedFields = validateLiveQuoteFields(providerQuote.quote, validationNowMs)
+    const fetchedAt = normalizeTimestamp(providerQuote.quote.fetchedAt)
+
+    if (!validatedFields || !fetchedAt) {
+      return []
+    }
+
+    return [
+      {
+        ...providerQuote,
+        validatedFields,
+        fetchedAtDate: new Date(fetchedAt),
+        quoteAsOfDate: new Date(validatedFields.asOf),
+        tradeDate: getChinaTradeDate(validatedFields.asOf),
+      },
+    ]
+  })
+
+  if (persistableQuotes.length === 0) {
+    return
+  }
+
+  let db: ReturnType<typeof getDb>
+
   try {
-    const db = getDb()
-    const validationNowMs = Date.now()
-    const todayDate = new Date(validationNowMs).toISOString().split('T')[0]
+    db = getDb()
+  } catch (error) {
+    warnSnapshotFailure('initialize quote snapshot persistence', error)
+    return
+  }
 
-    for (const { quote, source } of providerQuotes) {
-      const validatedFields = validateLiveQuoteFields(quote, validationNowMs)
-      const fetchedAt = normalizeTimestamp(quote.fetchedAt)
-
-      // Revalidate at the persistence boundary so malformed or fallback-completed data can never become last-good data.
-      if (!validatedFields || !fetchedAt) {
-        continue
-      }
-
-      const quoteAsOfDate = new Date(validatedFields.asOf)
-      const fetchedAtDate = new Date(fetchedAt)
-
+  await forEachBestEffort(
+    persistableQuotes,
+    async ({ quote, source, validatedFields, quoteAsOfDate, fetchedAtDate }) => {
       await db
         .insert(quoteSnapshots)
         .values({
@@ -514,6 +642,7 @@ async function persistQuoteSnapshots(providerQuotes: ProviderQuote[]) {
         })
         .onConflictDoUpdate({
           target: quoteSnapshots.stockCode,
+          setWhere: sql`${quoteSnapshots.quoteAsOf} is null or ${quoteSnapshots.quoteAsOf} <= ${quoteAsOfDate}`,
           set: {
             latestPrice: String(validatedFields.latestPrice),
             totalMarketCap: String(validatedFields.totalMarketCap),
@@ -524,15 +653,24 @@ async function persistQuoteSnapshots(providerQuotes: ProviderQuote[]) {
             fetchedAt: fetchedAtDate,
           },
         })
+    },
+    (error, item) => warnSnapshotFailure('persist quote snapshot', error, item.quote.code),
+  )
 
-      // Append to history table: one row per stock per trade date. During the
-      // trading day, repeated fetches overwrite today's row; after market close,
-      // the last upsert captures the closing values for charting / analysis.
+  const historyQuotes = persistableQuotes.filter(
+    (item): item is typeof item & { tradeDate: string } => item.tradeDate !== null,
+  )
+
+  // History is secondary to the last-good snapshot. A missing history table
+  // must not prevent snapshots for later stocks from being refreshed.
+  await forEachBestEffort(
+    historyQuotes,
+    async ({ quote, source, validatedFields, quoteAsOfDate, fetchedAtDate, tradeDate }) => {
       await db
         .insert(quoteHistory)
         .values({
           stockCode: quote.code,
-          tradeDate: todayDate,
+          tradeDate,
           latestPrice: String(validatedFields.latestPrice),
           totalMarketCap: String(validatedFields.totalMarketCap),
           priceChangePct: String(validatedFields.priceChangePct),
@@ -542,6 +680,7 @@ async function persistQuoteSnapshots(providerQuotes: ProviderQuote[]) {
         })
         .onConflictDoUpdate({
           target: [quoteHistory.stockCode, quoteHistory.tradeDate],
+          setWhere: sql`${quoteHistory.quoteAsOf} is null or ${quoteHistory.quoteAsOf} <= ${quoteAsOfDate}`,
           set: {
             latestPrice: String(validatedFields.latestPrice),
             totalMarketCap: String(validatedFields.totalMarketCap),
@@ -551,13 +690,16 @@ async function persistQuoteSnapshots(providerQuotes: ProviderQuote[]) {
             quoteAsOf: quoteAsOfDate,
           },
         })
-    }
-  } catch {
-    // Ignore snapshot persistence errors so live quote delivery is not blocked.
-  }
+    },
+    (error, item) => warnSnapshotFailure('persist quote history', error, item.quote.code),
+  )
 }
 
 async function readSnapshotQuotes() {
+  if (isMarketDataPersistenceDisabled()) {
+    return new Map<StockCode, ProviderQuote>()
+  }
+
   try {
     const db = getDb()
     const rows = await db.select().from(quoteSnapshots).orderBy(asc(quoteSnapshots.stockCode))
@@ -568,17 +710,18 @@ async function readSnapshotQuotes() {
         continue
       }
 
-      const latestPrice = toPositiveFiniteNumber(row.latestPrice)
-      const totalMarketCap = toPositiveFiniteNumber(row.totalMarketCap)
-      const priceChangePct = toFiniteNumber(row.priceChangePct)
-      const fetchedAt = normalizeTimestamp(row.fetchedAt)
+      const stock = getStockByCode(row.stockCode)
+      const validatedFields = validateSnapshotQuoteFields({
+        latestPrice: row.latestPrice,
+        totalMarketCap: row.totalMarketCap,
+        priceChangePct: row.priceChangePct,
+        asOf: row.quoteAsOf,
+        fetchedAt: row.fetchedAt,
+      })
 
-      if (latestPrice === null || totalMarketCap === null || priceChangePct === null || !fetchedAt) {
+      if (!validatedFields) {
         continue
       }
-
-      const stock = getStockByCode(row.stockCode)
-      const asOf = normalizeTimestamp(row.quoteAsOf)
 
       quotesByCode.set(row.stockCode, {
         source: row.source || '历史快照',
@@ -586,18 +729,19 @@ async function readSnapshotQuotes() {
           code: stock.code,
           name: stock.name,
           label: stock.label,
-          latestPrice,
-          totalMarketCap: Math.round(totalMarketCap),
-          priceChangePct,
-          updatedAt: asOf ? formatUpdatedAt(asOf) : row.quoteUpdatedAt || '--:--:--',
-          asOf,
-          fetchedAt,
+          latestPrice: validatedFields.latestPrice,
+          totalMarketCap: validatedFields.totalMarketCap,
+          priceChangePct: validatedFields.priceChangePct,
+          updatedAt: formatUpdatedAt(validatedFields.asOf),
+          asOf: validatedFields.asOf,
+          fetchedAt: validatedFields.fetchedAt,
         },
       })
     }
 
     return quotesByCode
-  } catch {
+  } catch (error) {
+    warnSnapshotFailure('read quote snapshots', error)
     return new Map<StockCode, ProviderQuote>()
   }
 }
@@ -618,7 +762,14 @@ function getConservativeTimestamp(quotes: StockQuote[], field: 'fetchedAt' | 'as
   return new Date(Math.min(...timestampValues)).toISOString()
 }
 
-function buildQuoteFeed(
+function shouldPreferSnapshotQuote(liveQuote: ProviderQuote, snapshotQuote: ProviderQuote) {
+  const liveAsOf = liveQuote.quote.asOf ? Date.parse(liveQuote.quote.asOf) : Number.NaN
+  const snapshotAsOf = snapshotQuote.quote.asOf ? Date.parse(snapshotQuote.quote.asOf) : Number.NaN
+
+  return Number.isFinite(snapshotAsOf) && (!Number.isFinite(liveAsOf) || snapshotAsOf > liveAsOf)
+}
+
+export function buildQuoteFeed(
   liveQuotes: Map<StockCode, ProviderQuote>,
   snapshotQuotes: Map<StockCode, ProviderQuote>,
 ): QuoteFeed {
@@ -630,15 +781,14 @@ function buildQuoteFeed(
 
   for (const stock of STOCKS) {
     const liveQuote = liveQuotes.get(stock.code)
+    const snapshotQuote = snapshotQuotes.get(stock.code)
 
-    if (liveQuote) {
+    if (liveQuote && (!snapshotQuote || !shouldPreferSnapshotQuote(liveQuote, snapshotQuote))) {
       quotes.push(liveQuote.quote)
       sources.push(liveQuote.source)
       freshnessByCode[stock.code] = 'live'
       continue
     }
-
-    const snapshotQuote = snapshotQuotes.get(stock.code)
 
     if (snapshotQuote) {
       quotes.push(snapshotQuote.quote)
@@ -671,11 +821,14 @@ async function fetchFreshQuoteFeed() {
     await persistQuoteSnapshots([...liveQuotes.values()])
   }
 
-  const snapshotQuotes = liveQuotes.size === STOCKS.length ? new Map<StockCode, ProviderQuote>() : await readSnapshotQuotes()
+  // Read after the monotonic upsert so a concurrently stored newer snapshot
+  // can still win over an older provider response in this request.
+  const snapshotQuotes = await readSnapshotQuotes()
   const nextFeed = buildQuoteFeed(liveQuotes, snapshotQuotes)
 
   cachedQuoteFeed = cloneQuoteFeed(nextFeed)
-  cacheExpiresAt = Date.now() + QUOTE_CACHE_TTL_MS
+  cacheExpiresAt =
+    Date.now() + (nextFeed.freshness === 'live' ? QUOTE_CACHE_TTL_MS : QUOTE_DEGRADED_CACHE_TTL_MS)
   return nextFeed
 }
 
@@ -694,6 +847,9 @@ export async function listQuotes() {
   } catch {
     const snapshotQuotes = await readSnapshotQuotes()
     const emergencyFeed = buildQuoteFeed(new Map<StockCode, ProviderQuote>(), snapshotQuotes)
+
+    cachedQuoteFeed = cloneQuoteFeed(emergencyFeed)
+    cacheExpiresAt = Date.now() + QUOTE_DEGRADED_CACHE_TTL_MS
     return cloneQuoteFeed(emergencyFeed)
   } finally {
     pendingQuotesRequest = null

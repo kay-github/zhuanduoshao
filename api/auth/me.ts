@@ -1,12 +1,14 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { eq } from 'drizzle-orm'
 
-import { clearSessionCookie, readSession } from '../../lib/server/auth.js'
+import { readSession } from '../../lib/server/auth.js'
 import { getDb } from '../../lib/server/db.js'
-import { json, methodNotAllowed, handleApiError } from '../../lib/server/http.js'
+import { json, methodNotAllowed, handleApiError, setNoStore } from '../../lib/server/http.js'
 import { users } from '../../lib/server/schema.js'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  setNoStore(res)
+
   try {
     if (req.method !== 'GET') {
       return methodNotAllowed(res, ['GET'])
@@ -15,7 +17,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const session = await readSession(req)
 
     if (!session) {
-      clearSessionCookie(res)
       return json(res, 401, { error: '未登录' })
     }
 
@@ -31,7 +32,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .limit(1)
 
     if (!user) {
-      clearSessionCookie(res)
       return json(res, 401, { error: '登录状态已失效' })
     }
 

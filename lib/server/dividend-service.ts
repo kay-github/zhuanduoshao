@@ -1,4 +1,5 @@
 import { getDb } from './db.js'
+import { forEachBestEffort, isMarketDataPersistenceDisabled } from './market-data-persistence.js'
 import { dividendSnapshots } from './schema.js'
 import { STOCKS, getStockByCode, isStockCode, type StockCode } from '../../shared/stocks.js'
 
@@ -7,6 +8,7 @@ const TUSHARE_API_URL = 'https://api.tushare.pro'
 const TUSHARE_DIVIDEND_FIELDS =
   'ts_code,end_date,ann_date,div_proc,stk_div,stk_bo_rate,stk_co_rate,cash_div,cash_div_tax,record_date,ex_date'
 const DIVIDEND_CACHE_TTL_MS = 60 * 60 * 1000
+const DIVIDEND_DEGRADED_CACHE_TTL_MS = 5 * 60 * 1000
 const DIVIDEND_TIMEOUT_MS = 7_000
 
 type DividendFreshness = 'live' | 'partial' | 'cached' | 'fallback'
@@ -100,6 +102,27 @@ function toFiniteNumber(value: unknown) {
   return Number.isFinite(numberValue) ? numberValue : null
 }
 
+function toNonNegativeFiniteNumber(value: unknown) {
+  const numberValue = toFiniteNumber(value)
+  return numberValue !== null && numberValue >= 0 ? numberValue : null
+}
+
+function isMissingProviderValue(value: unknown) {
+  return (
+    value === null ||
+    value === undefined ||
+    (typeof value === 'string' && ['', '-', '--'].includes(value.trim()))
+  )
+}
+
+function isInvalidNonNegativeProviderValue(value: unknown) {
+  return !isMissingProviderValue(value) && toNonNegativeFiniteNumber(value) === null
+}
+
+function toPerTenRatio(perShareRatio: number) {
+  return Math.round(perShareRatio * 10 * 1_000_000_000) / 1_000_000_000
+}
+
 function toDateText(value: unknown) {
   if (typeof value !== 'string' && typeof value !== 'number') {
     return ''
@@ -117,9 +140,125 @@ function toDateText(value: unknown) {
   return text.slice(0, 10)
 }
 
+function isValidDateText(value: unknown, required = false) {
+  if (typeof value !== 'string') {
+    return false
+  }
+
+  if (!value) {
+    return !required
+  }
+
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+
+  if (!match) {
+    return false
+  }
+
+  const [year, month, day] = match.slice(1).map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  )
+}
+
+function isNullableFiniteNumber(value: unknown) {
+  return value === null || (typeof value === 'number' && Number.isFinite(value))
+}
+
+function isNullableNonNegativeFiniteNumber(value: unknown) {
+  return value === null || (typeof value === 'number' && Number.isFinite(value) && value >= 0)
+}
+
+export function isValidDividendRecord(value: unknown): value is DividendRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+
+  const record = value as Record<string, unknown>
+  const optionalDateFields = [
+    'performanceDisclosureDate',
+    'proposalDate',
+    'recordDate',
+    'exDate',
+    'latestAnnouncementDate',
+  ]
+  const numericFields = [
+    'totalRatio',
+    'sendRatio',
+    'transferRatio',
+    'cashDividendRatio',
+    'dividendYield',
+    'earningsPerShare',
+    'netAssetPerShare',
+    'capitalReservePerShare',
+    'retainedEarningsPerShare',
+    'netProfitGrowthPct',
+    'totalShares',
+  ]
+  const nonNegativeFields = [
+    'totalRatio',
+    'sendRatio',
+    'transferRatio',
+    'cashDividendRatio',
+    'dividendYield',
+    'totalShares',
+  ]
+
+  if (!isValidDateText(record.reportDate, true)) {
+    return false
+  }
+
+  if (optionalDateFields.some((field) => !isValidDateText(record[field]))) {
+    return false
+  }
+
+  if (
+    typeof record.cashDividendDescription !== 'string' ||
+    typeof record.planProgress !== 'string' ||
+    !record.planProgress.trim()
+  ) {
+    return false
+  }
+
+  if (numericFields.some((field) => !isNullableFiniteNumber(record[field]))) {
+    return false
+  }
+
+  if (nonNegativeFields.some((field) => !isNullableNonNegativeFiniteNumber(record[field]))) {
+    return false
+  }
+
+  const hasEventEvidence =
+    optionalDateFields.some((field) => Boolean(record[field])) ||
+    ['totalRatio', 'sendRatio', 'transferRatio', 'cashDividendRatio'].some(
+      (field) => record[field] !== null,
+    )
+
+  return hasEventEvidence
+}
+
+export function getValidDividendRecords(value: unknown) {
+  if (!Array.isArray(value)) {
+    return null
+  }
+
+  const records = value.filter(isValidDividendRecord)
+  return records.length > 0 ? records : null
+}
+
 function summarizeSources(sources: Iterable<string>) {
   const uniqueSources = [...new Set(sources)].filter(Boolean)
   return uniqueSources.length > 0 ? uniqueSources.join(' + ') : '未知来源'
+}
+
+function warnSnapshotFailure(operation: string, error: unknown, stockCode?: string) {
+  const errorType = error instanceof Error ? error.name : 'UnknownError'
+  const stockContext = stockCode ? ` for stock ${stockCode}` : ''
+  console.warn(`[dividend-service] ${operation}${stockContext} failed (${errorType})`)
 }
 
 function normalizeDividendRow(row: Record<string, unknown>): DividendRecord | null {
@@ -129,7 +268,15 @@ function normalizeDividendRow(row: Record<string, unknown>): DividendRecord | nu
     return null
   }
 
-  return {
+  if (
+    [row.BONUS_IT_RATIO, row.BONUS_RATIO, row.IT_RATIO, row.PRETAX_BONUS_RMB].some(
+      isInvalidNonNegativeProviderValue,
+    )
+  ) {
+    return null
+  }
+
+  const record: DividendRecord = {
     reportDate: toDateText(row.REPORT_DATE),
     performanceDisclosureDate: toDateText(row.PUBLISH_DATE),
     totalRatio: toFiniteNumber(row.BONUS_IT_RATIO),
@@ -150,9 +297,11 @@ function normalizeDividendRow(row: Record<string, unknown>): DividendRecord | nu
     planProgress: typeof row.ASSIGN_PROGRESS === 'string' ? row.ASSIGN_PROGRESS.trim() : '',
     latestAnnouncementDate: toDateText(row.NOTICE_DATE),
   }
+
+  return isValidDividendRecord(record) ? record : null
 }
 
-function normalizeTushareDividendRow(row: Record<string, unknown>): DividendRecord | null {
+export function normalizeTushareDividendRow(row: Record<string, unknown>): DividendRecord | null {
   const tsCode = typeof row.ts_code === 'string' ? row.ts_code : ''
   const stockCode = tsCode.slice(0, 6)
 
@@ -160,18 +309,65 @@ function normalizeTushareDividendRow(row: Record<string, unknown>): DividendReco
     return null
   }
 
-  const sendRatio = (toFiniteNumber(row.stk_bo_rate) ?? toFiniteNumber(row.stk_div) ?? 0) * 10
-  const transferRatio = (toFiniteNumber(row.stk_co_rate) ?? 0) * 10
-  const cashDividendRatio = (toFiniteNumber(row.cash_div_tax) ?? toFiniteNumber(row.cash_div) ?? 0) * 10
+  if (
+    [row.stk_div, row.stk_bo_rate, row.stk_co_rate, row.cash_div_tax].some(
+      isInvalidNonNegativeProviderValue,
+    )
+  ) {
+    return null
+  }
 
-  return {
+  const totalStockRatioPerShare = toNonNegativeFiniteNumber(row.stk_div)
+  const sendRatioPerShare = toNonNegativeFiniteNumber(row.stk_bo_rate)
+  const transferRatioPerShare = toNonNegativeFiniteNumber(row.stk_co_rate)
+
+  let normalizedSendRatioPerShare: number | null
+  let normalizedTransferRatioPerShare: number | null
+
+  if (
+    totalStockRatioPerShare === null &&
+    sendRatioPerShare === null &&
+    transferRatioPerShare === null
+  ) {
+    normalizedSendRatioPerShare = null
+    normalizedTransferRatioPerShare = null
+  } else if (sendRatioPerShare === null && transferRatioPerShare === null) {
+    normalizedSendRatioPerShare = totalStockRatioPerShare ?? 0
+    normalizedTransferRatioPerShare = 0
+  } else {
+    normalizedSendRatioPerShare =
+      sendRatioPerShare ??
+      Math.max(
+        0,
+        (totalStockRatioPerShare ?? transferRatioPerShare ?? 0) - (transferRatioPerShare ?? 0),
+      )
+    normalizedTransferRatioPerShare =
+      transferRatioPerShare ??
+      Math.max(0, (totalStockRatioPerShare ?? sendRatioPerShare ?? 0) - (sendRatioPerShare ?? 0))
+  }
+
+  const sendRatio =
+    normalizedSendRatioPerShare === null ? null : toPerTenRatio(normalizedSendRatioPerShare)
+  const transferRatio =
+    normalizedTransferRatioPerShare === null ? null : toPerTenRatio(normalizedTransferRatioPerShare)
+  const cashDividendPerShareBeforeTax = toNonNegativeFiniteNumber(row.cash_div_tax)
+  const cashDividendRatio =
+    cashDividendPerShareBeforeTax === null ? null : toPerTenRatio(cashDividendPerShareBeforeTax)
+  const stockDividendText =
+    sendRatio === null && transferRatio === null
+      ? ''
+      : `10股送${sendRatio ?? 0}股转${transferRatio ?? 0}股`
+  const cashDividendText =
+    cashDividendRatio === null ? '派--元（税前金额缺失）' : `派${cashDividendRatio}元`
+
+  const record: DividendRecord = {
     reportDate: toDateText(row.end_date),
     performanceDisclosureDate: toDateText(row.ann_date),
-    totalRatio: sendRatio + transferRatio,
+    totalRatio: sendRatio === null && transferRatio === null ? null : (sendRatio ?? 0) + (transferRatio ?? 0),
     sendRatio,
     transferRatio,
     cashDividendRatio,
-    cashDividendDescription: `10股送${sendRatio}股转${transferRatio}股派${cashDividendRatio}元`,
+    cashDividendDescription: `${stockDividendText}${cashDividendText}`,
     dividendYield: null,
     earningsPerShare: null,
     netAssetPerShare: null,
@@ -185,10 +381,8 @@ function normalizeTushareDividendRow(row: Record<string, unknown>): DividendReco
     planProgress: typeof row.div_proc === 'string' ? row.div_proc.trim() : '',
     latestAnnouncementDate: toDateText(row.ann_date),
   }
-}
 
-function isDividendRecord(value: unknown): value is DividendRecord {
-  return Boolean(value && typeof value === 'object' && 'exDate' in value && typeof value.exDate === 'string')
+  return isValidDividendRecord(record) ? record : null
 }
 
 function buildEmptyDividendItem(code: StockCode): DividendFeedItem {
@@ -393,12 +587,8 @@ async function fetchDividendHistory(code: StockCode) {
   if (firstPage.pages > 1) {
     const extraPages = await Promise.all(
       Array.from({ length: firstPage.pages - 1 }, async (_, index) => {
-        try {
-          const page = await fetchDividendPage(code, index + 2)
-          return page.rows
-        } catch {
-          return []
-        }
+        const page = await fetchDividendPage(code, index + 2)
+        return page.rows
       }),
     )
 
@@ -448,15 +638,33 @@ async function fetchLiveDividendItems() {
 }
 
 async function persistDividendSnapshots(items: DividendFeedItem[]) {
-  if (items.length === 0) {
+  if (items.length === 0 || isMarketDataPersistenceDisabled()) {
     return
   }
 
-  try {
-    const db = getDb()
-    const fetchedAt = new Date()
+  const validItems = items.flatMap((item) => {
+    const records = getValidDividendRecords(item.records)
+    return records ? [{ ...item, records }] : []
+  })
 
-    for (const item of items) {
+  if (validItems.length === 0) {
+    return
+  }
+
+  let db: ReturnType<typeof getDb>
+
+  try {
+    db = getDb()
+  } catch (error) {
+    warnSnapshotFailure('initialize dividend snapshot persistence', error)
+    return
+  }
+
+  const fetchedAt = new Date()
+
+  await forEachBestEffort(
+    validItems,
+    async (item) => {
       await db
         .insert(dividendSnapshots)
         .values({
@@ -473,13 +681,16 @@ async function persistDividendSnapshots(items: DividendFeedItem[]) {
             fetchedAt,
           },
         })
-    }
-  } catch {
-    // Ignore snapshot persistence errors so dividend delivery is not blocked.
-  }
+    },
+    (error, item) => warnSnapshotFailure('persist dividend snapshot', error, item.code),
+  )
 }
 
 async function readSnapshotDividendItems() {
+  if (isMarketDataPersistenceDisabled()) {
+    return new Map<StockCode, DividendFeedItem>()
+  }
+
   try {
     const db = getDb()
     const rows = await db.select().from(dividendSnapshots)
@@ -494,11 +705,22 @@ async function readSnapshotDividendItems() {
 
       try {
         parsedPayload = JSON.parse(row.payload) as unknown
-      } catch {
+      } catch (error) {
+        warnSnapshotFailure('parse dividend snapshot', error, row.stockCode)
         continue
       }
 
-      const records = Array.isArray(parsedPayload) ? parsedPayload.filter(isDividendRecord) : []
+      const records = getValidDividendRecords(parsedPayload)
+
+      if (!records) {
+        warnSnapshotFailure(
+          'validate dividend snapshot',
+          new TypeError('snapshot has no valid dividend records'),
+          row.stockCode,
+        )
+        continue
+      }
+
       const stock = getStockByCode(row.stockCode)
 
       items.set(row.stockCode, {
@@ -511,7 +733,8 @@ async function readSnapshotDividendItems() {
     }
 
     return items
-  } catch {
+  } catch (error) {
+    warnSnapshotFailure('read dividend snapshots', error)
     return new Map<StockCode, DividendFeedItem>()
   }
 }
@@ -526,9 +749,11 @@ async function fetchFreshDividendFeed() {
 
   if (liveItems.size > 0) {
     await persistDividendSnapshots([...liveItems.values()])
-    cachedDividendFeed = cloneDividendFeed(feed)
-    cacheExpiresAt = Date.now() + DIVIDEND_CACHE_TTL_MS
   }
+
+  cachedDividendFeed = cloneDividendFeed(feed)
+  cacheExpiresAt =
+    Date.now() + (feed.freshness === 'live' ? DIVIDEND_CACHE_TTL_MS : DIVIDEND_DEGRADED_CACHE_TTL_MS)
 
   return feed
 }
@@ -547,18 +772,22 @@ export async function listDividends() {
     return cloneDividendFeed(await pendingDividendRequest)
   } catch {
     const snapshotItems = await readSnapshotDividendItems()
+    let emergencyFeed: DividendFeed
 
     if (snapshotItems.size > 0) {
-      return cloneDividendFeed(buildDividendFeed(new Map<StockCode, DividendFeedItem>(), snapshotItems))
+      emergencyFeed = buildDividendFeed(new Map<StockCode, DividendFeedItem>(), snapshotItems)
+    } else if (cachedDividendFeed) {
+      emergencyFeed = cloneDividendFeed(cachedDividendFeed)
+    } else {
+      emergencyFeed = buildDividendFeed(
+        new Map<StockCode, DividendFeedItem>(),
+        new Map<StockCode, DividendFeedItem>(),
+      )
     }
 
-    if (cachedDividendFeed) {
-      return cloneDividendFeed(cachedDividendFeed)
-    }
-
-    return cloneDividendFeed(
-      buildDividendFeed(new Map<StockCode, DividendFeedItem>(), new Map<StockCode, DividendFeedItem>()),
-    )
+    cachedDividendFeed = cloneDividendFeed(emergencyFeed)
+    cacheExpiresAt = Date.now() + DIVIDEND_DEGRADED_CACHE_TTL_MS
+    return cloneDividendFeed(emergencyFeed)
   } finally {
     pendingDividendRequest = null
   }
