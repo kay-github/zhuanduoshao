@@ -4,6 +4,7 @@ Last updated: 2026-07-21
 
 ## Key Progress Memory
 
+- 2026-07-21 production release: hardening commits `8cf3486` and `7cbb05d` were pushed to `origin/main` and deployed to Vercel production at `https://xd.688680.xyz`. Public homepage/quote/dividend/auth checks passed, followed by a temporary-account register/session/save/read/mismatch/logout E2E; the temporary user and cascaded position were removed afterward.
 - 2026-07-21 hardening round: auth configuration is validated before writes; bcrypt passwords are capped at 72 UTF-8 bytes; auth mutations require JSON; malformed cookies no longer cause 500s; stale `/api/auth/me` responses cannot clear a newer session; frontend session epochs and `X-Expected-User-Id` protect logout/account-switch and multi-tab races; save-all uses fixed draft snapshots; position payloads use shared strict numeric validation; save responses safely re-read missing or driver-shaped rows; anonymous drafts use a versioned local-storage scope and China-calendar dates; only explicitly implemented corporate actions affect returns; quote/dividend persistence is isolated per stock; quote snapshots/history update monotonically by `quote_as_of`; provider and snapshot validation is strict; smoke scripts now assert valid live data instead of only printing it. Full check: 20 files / 140 tests.
 - 2026-07-19: share-card export shipped. `src/lib/share-card.ts` builds pure card data (unit-tested), `src/lib/share-card-renderer.ts` renders a 2x canvas PNG and prefers the Web Share API (mobile) with download fallback. Entry points: a share button on every mobile scenario card and a 分享 column in the desktop table. Verified with headless Chromium at 390px: no horizontal overflow, PNG renders correctly with profit headline, metric panel, and disclaimer.
 - 2026-07-18 hardening round: fallback quotes refreshed to live values (AGENTS.md documents the ~30% drift refresh rule), auth rate limiting now failure-only for login (50/10min, testable factory + unit tests), `quote_history` table (migration 0003, pushed to production) captures one row per stock per trade date via upsert during trading hours.
@@ -39,7 +40,7 @@ Current state (2026-07-21):
   - Quote snapshot/history persistence is monotonic by `quote_as_of`, and newer persisted data takes priority over an older live response
   - Notes card includes dividend-tax explanation and investment disclaimer; register dialog warns passwords cannot be recovered
   - `getQuote` reports per-stock freshness via `freshnessByCode`; CI no longer double-runs typechecks
-- Current working tree contains the 2026-07-21 hardening changes and is not yet committed or deployed. Live no-persist market-data smoke, database contract verification, full build/tests, and 390px overflow checks have passed. A real-account browser E2E was intentionally not run because the available local environment points at a persistent database.
+- The 2026-07-21 hardening changes are committed, pushed, and deployed to production. Live no-persist market-data smoke, database contract verification, full build/tests, 390px overflow checks, and a temporary production-account API E2E have passed. A true two-tab browser account-switch E2E is still pending.
 
 ## What Is Already Done
 
@@ -178,7 +179,13 @@ Current positions rule:
 
 Additional 2026-07-21 UI verification:
 - Chrome at a `390x844` viewport had no horizontal overflow; stock drafts/tax brackets stayed independent and custom price-target mode worked.
-- A real-account auth/position browser E2E and a multi-tab account-switch browser E2E were intentionally not run because the available environment points at a persistent database.
+
+2026-07-21 production deployment verification:
+- Commits `8cf3486` and `7cbb05d` were pushed to `origin/main`; Vercel production is aliased to `https://xd.688680.xyz`.
+- Homepage returned 200; quotes and dividends returned both configured stocks with `live` freshness.
+- A temporary production account completed JSON-only rejection, registration, session restore, empty position load, four-decimal position save, position restore, mismatched-account 409, logout, and post-logout 401 checks.
+- The temporary production user and its cascaded position were deleted immediately after the smoke test.
+- A true two-tab browser UI E2E has not been run; the underlying API mismatch behavior was verified in production.
 
 Historical production/runtime checks (not rerun as part of the 2026-07-21 working-tree verification):
 - `npx tsx -e "import { listQuotes } from './lib/server/quote-service.ts'; (async () => { const quotes = await listQuotes(); console.log(JSON.stringify(quotes, null, 2)); })();"`
@@ -301,13 +308,12 @@ Database files:
 
 ### Priority 1
 
-- Review, commit, and deploy the 2026-07-21 working tree.
-- Before deployment, run `npm run db:verify` against the target environment. No new migration is required by this hardening round.
-- After deployment, smoke `/api/quotes`, `/api/dividends`, `/api/auth/me`, and one account-scoped position save/read flow.
+- Monitor Vercel function logs and public-provider freshness after the 2026-07-21 release.
+- Consider pinning the Vercel Node major instead of allowing future automatic major upgrades through the current `engines.node` range.
 
 ### Priority 2
 
-- Run a real-account E2E in an isolated/test database: preserve a nonzero anonymous draft across registration/login, explicitly save it, reload, and verify logout restores only the anonymous draft scope.
+- Run a browser E2E in an isolated/test database: preserve a nonzero anonymous draft across registration/login, explicitly save it, reload, and verify logout restores only the anonymous draft scope.
 - Run a two-tab account-switch E2E and confirm the stale tab gets 409 without reading or writing the newly active account.
 - Add Vue component-level coverage for stale session responses/save races, a matching expected-user success path, and compiled monotonic-upsert SQL.
 - Exercise 429 behavior separately for login IP, login username, and registration IP namespaces. The limiter remains a per-instance serverless soft cap and concurrent requests can still race before failed attempts are recorded.
