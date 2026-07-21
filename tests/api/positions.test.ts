@@ -6,15 +6,15 @@ const { getDbMock, readSessionMock } = vi.hoisted(() => ({
   readSessionMock: vi.fn(),
 }))
 
-vi.mock('../lib/server/auth.js', () => ({
+vi.mock('../../lib/server/auth.js', () => ({
   readSession: readSessionMock,
 }))
 
-vi.mock('../lib/server/db.js', () => ({
+vi.mock('../../lib/server/db.js', () => ({
   getDb: getDbMock,
 }))
 
-import handler from './positions.js'
+import handler from '../../api/positions.js'
 
 function createResponse() {
   let responseBody = ''

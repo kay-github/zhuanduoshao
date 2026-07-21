@@ -5,11 +5,11 @@ const { getDbMock } = vi.hoisted(() => ({
   getDbMock: vi.fn(),
 }))
 
-vi.mock('../../lib/server/db.js', () => ({
+vi.mock('../../../lib/server/db.js', () => ({
   getDb: getDbMock,
 }))
 
-import handler from './login.js'
+import handler from '../../../api/auth/login.js'
 
 function createResponse() {
   let responseBody = ''

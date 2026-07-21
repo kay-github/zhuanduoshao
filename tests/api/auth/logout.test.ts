@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { describe, expect, it } from 'vitest'
 
-import handler from './logout.js'
+import handler from '../../../api/auth/logout.js'
 
 function createResponse() {
   const headers = new Map<string, string | number | readonly string[]>()

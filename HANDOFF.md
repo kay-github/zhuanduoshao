@@ -4,6 +4,7 @@ Last updated: 2026-07-21
 
 ## Key Progress Memory
 
+- 2026-07-21 Vercel packaging follow-up: five API handler test files were moved from `api/` to `tests/api/`, and Vitest now excludes generated `.vercel/` output. A fresh production build contains exactly the seven intended API Functions and zero `.test` Functions.
 - 2026-07-21 production release: hardening commits `8cf3486` and `7cbb05d` were pushed to `origin/main` and deployed to Vercel production at `https://xd.688680.xyz`. Public homepage/quote/dividend/auth checks passed, followed by a temporary-account register/session/save/read/mismatch/logout E2E; the temporary user and cascaded position were removed afterward.
 - 2026-07-21 hardening round: auth configuration is validated before writes; bcrypt passwords are capped at 72 UTF-8 bytes; auth mutations require JSON; malformed cookies no longer cause 500s; stale `/api/auth/me` responses cannot clear a newer session; frontend session epochs and `X-Expected-User-Id` protect logout/account-switch and multi-tab races; save-all uses fixed draft snapshots; position payloads use shared strict numeric validation; save responses safely re-read missing or driver-shaped rows; anonymous drafts use a versioned local-storage scope and China-calendar dates; only explicitly implemented corporate actions affect returns; quote/dividend persistence is isolated per stock; quote snapshots/history update monotonically by `quote_as_of`; provider and snapshot validation is strict; smoke scripts now assert valid live data instead of only printing it. Full check: 20 files / 140 tests.
 - 2026-07-19: share-card export shipped. `src/lib/share-card.ts` builds pure card data (unit-tested), `src/lib/share-card-renderer.ts` renders a 2x canvas PNG and prefers the Web Share API (mobile) with download fallback. Entry points: a share button on every mobile scenario card and a 分享 column in the desktop table. Verified with headless Chromium at 390px: no horizontal overflow, PNG renders correctly with profit headline, metric panel, and disclaimer.
@@ -175,6 +176,7 @@ Current positions rule:
 - `npm run db:verify` (all 5 application tables match column type/precision/nullability/default, primary-key, unique-index, and foreign-key contracts)
 - `npm audit --omit=dev` (0 vulnerabilities)
 - `npm audit` (7 high + 7 moderate findings, all in the development toolchain; the suggested automatic fix requires inappropriate major-version changes)
+- `vercel build --prod --yes` (successful production output with exactly 7 intended API Functions and no test Functions)
 - `git diff --check`
 
 Additional 2026-07-21 UI verification:

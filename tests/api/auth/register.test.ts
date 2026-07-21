@@ -5,11 +5,11 @@ const { getDbMock } = vi.hoisted(() => ({
   getDbMock: vi.fn(),
 }))
 
-vi.mock('../../lib/server/db.js', () => ({
+vi.mock('../../../lib/server/db.js', () => ({
   getDb: getDbMock,
 }))
 
-import handler from './register.js'
+import handler from '../../../api/auth/register.js'
 
 function createResponse() {
   const headers = new Map<string, string | number | readonly string[]>()

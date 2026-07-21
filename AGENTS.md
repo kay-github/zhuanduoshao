@@ -138,6 +138,7 @@ Default target total market cap list in MVP:
 - Position save payloads must use real JSON numbers, stay within the shared storage-safe bounds, use at most four cost-price decimals, and require a positive cost price for a nonzero holding.
 - The notes card must keep the investment disclaimer and the dividend-tax explanation; the register dialog must mention that passwords cannot be recovered.
 - For save endpoints, avoid reporting a generic failure after a successful write; if a write succeeds but the returned row is missing or driver-shaped differently, perform a safe post-write lookup before responding.
+- Do not place test files under `api/`; Vercel treats source files there as deployable Functions. Keep handler tests under `tests/api/` and exclude generated `.vercel/` output from Vitest discovery.
 - Update this `AGENTS.md` whenever product rules, architecture choices, or major decisions change.
 - Maintain `HANDOFF.md` with current implementation status and next-step guidance for future handoff.
 - Do not commit or store secrets such as GitHub tokens in the repository.
