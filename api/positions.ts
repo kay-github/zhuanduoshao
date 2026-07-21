@@ -47,7 +47,8 @@ function parseSavedPosition(value: unknown, expectedUserId: string, expectedStoc
   const candidate = value as Record<string, unknown>
   const quantity = normalizeNumericField(candidate.quantity, true)
   const costPrice = normalizeNumericField(candidate.costPrice)
-  const basisDate = candidate.basisDate
+  const basisDate =
+    candidate.basisDate === null || typeof candidate.basisDate === 'string' ? candidate.basisDate : undefined
   const updatedAt = candidate.updatedAt
   const normalizedUpdatedAt =
     updatedAt instanceof Date
@@ -64,7 +65,7 @@ function parseSavedPosition(value: unknown, expectedUserId: string, expectedStoc
     candidate.stockCode !== expectedStockCode ||
     quantity === null ||
     costPrice === null ||
-    (basisDate !== null && typeof basisDate !== 'string') ||
+    basisDate === undefined ||
     normalizedUpdatedAt === null
   ) {
     return null
@@ -76,7 +77,7 @@ function parseSavedPosition(value: unknown, expectedUserId: string, expectedStoc
     stockCode: expectedStockCode,
     quantity,
     costPrice,
-    basisDate,
+    basisDate: basisDate as string | null,
     updatedAt: normalizedUpdatedAt,
   }
 }
