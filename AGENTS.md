@@ -46,6 +46,7 @@ Confirmed decisions:
 - A stale `/api/auth/me` 401 response must not clear the session cookie because it may race with a newer successful login
 - `AUTH_SECRET` must be at least 32 characters, must not be an example/placeholder value, and must be validated before account creation writes
 - Passwords must be at least 6 characters and no more than 72 UTF-8 bytes because bcrypt ignores bytes beyond that boundary
+- Password hashes are one-way and must never be treated as recoverable. Operational password resets must use the project's `hashPassword` and `verifyPassword` helpers, and plaintext passwords must never be written to source files, logs, or project documentation
 
 Out of scope for MVP unless explicitly added:
 - Complex profile system

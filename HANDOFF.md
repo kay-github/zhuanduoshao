@@ -1,9 +1,12 @@
 # HANDOFF
 
-Last updated: 2026-07-21
+Last updated: 2026-08-16
 
 ## Key Progress Memory
 
+- 2026-08-16 production alignment check: `https://xd.688680.xyz` returned 200 for the homepage, quotes, dividends, admin login, session restore, and logout. Quotes returned both stocks as `live` from Tencent, and corporate actions returned both stocks as `live` from Eastmoney.
+- 2026-08-16 auth maintenance: the production database contains exactly one `admin` account. Its password was rotated with the project's bcrypt helper and verified both against the stored hash and through the deployed login/session/logout flow. Plaintext credentials are intentionally not recorded in the repository.
+- 2026-08-16 local workspace cleanup: the complete repository, including `.git` and ignored local configuration, was moved from `D:\code_zhuan\code_zhuan` to `D:\code_zhuan`. `npm run build` passed from the new root and the worktree remained clean. The pre-existing machine-local `analysis/` directory is excluded only through `.git/info/exclude` and is not part of the repository.
 - 2026-07-21 Vercel packaging follow-up: five API handler test files were moved from `api/` to `tests/api/`, and Vitest now excludes generated `.vercel/` output. A fresh production build contains exactly the seven intended API Functions and zero `.test` Functions.
 - 2026-07-21 production release: hardening commits `8cf3486` and `7cbb05d` were pushed to `origin/main` and deployed to Vercel production at `https://xd.688680.xyz`. Public homepage/quote/dividend/auth checks passed, followed by a temporary-account register/session/save/read/mismatch/logout E2E; the temporary user and cascaded position were removed afterward.
 - 2026-07-21 hardening round: auth configuration is validated before writes; bcrypt passwords are capped at 72 UTF-8 bytes; auth mutations require JSON; malformed cookies no longer cause 500s; stale `/api/auth/me` responses cannot clear a newer session; frontend session epochs and `X-Expected-User-Id` protect logout/account-switch and multi-tab races; save-all uses fixed draft snapshots; position payloads use shared strict numeric validation; save responses safely re-read missing or driver-shaped rows; anonymous drafts use a versioned local-storage scope and China-calendar dates; only explicitly implemented corporate actions affect returns; quote/dividend persistence is isolated per stock; quote snapshots/history update monotonically by `quote_as_of`; provider and snapshot validation is strict; smoke scripts now assert valid live data instead of only printing it. Full check: 20 files / 140 tests.
@@ -22,7 +25,7 @@ Last updated: 2026-07-21
 Project name:
 - `赚多少`
 
-Current state (2026-07-21):
+Current state (2026-08-16):
 - Frontend `TypeScript + Vue 3 + Vite`, split into `AppHeader` / `QuotePanel` / `ScenarioProjectionPanel` components with pure calculation logic in `src/lib/portfolio-calculations.ts` (vitest-covered)
 - Backend `Vercel Functions + PostgreSQL + Drizzle`, quote/dividend services with multi-provider + snapshot fallback
 - New this round (all implemented, verified by `npm run check`):
@@ -41,7 +44,7 @@ Current state (2026-07-21):
   - Quote snapshot/history persistence is monotonic by `quote_as_of`, and newer persisted data takes priority over an older live response
   - Notes card includes dividend-tax explanation and investment disclaimer; register dialog warns passwords cannot be recovered
   - `getQuote` reports per-stock freshness via `freshnessByCode`; CI no longer double-runs typechecks
-- The 2026-07-21 hardening changes are committed, pushed, and deployed to production. Live no-persist market-data smoke, database contract verification, full build/tests, 390px overflow checks, and a temporary production-account API E2E have passed. A true two-tab browser account-switch E2E is still pending.
+- The 2026-07-21 hardening changes remain deployed to production. The 2026-08-16 reconciliation confirmed the public market-data endpoints and the production admin auth flow are healthy. Live no-persist market-data smoke, database contract verification, full build/tests, 390px overflow checks, and a temporary production-account API E2E have passed. A true two-tab browser account-switch E2E is still pending.
 
 ## What Is Already Done
 
@@ -170,6 +173,12 @@ Current positions rule:
 
 ## Verified So Far
 
+2026-08-16 production/workspace alignment:
+- `git fetch origin --prune` confirmed local `main` and `origin/main` were aligned before this documentation update.
+- `npm run build` passed from the normalized `D:\code_zhuan` repository root (frontend typecheck, server typecheck, and Vite production build).
+- Production homepage, `/api/quotes`, and `/api/dividends` returned 200; quotes were `live` from Tencent for both stocks and corporate actions were `live` from Eastmoney for both stocks.
+- The production `admin` password rotation was verified with bcrypt and with deployed `/api/auth/login` -> `/api/auth/me` -> `/api/auth/logout` requests, all returning 200. No plaintext password is stored in project files or documentation.
+
 2026-07-21 working-tree checks:
 - `npm run check` (20 test files / 140 tests, frontend and server typechecks, Vite production build, Drizzle migration check)
 - `npm run smoke:data:no-persist` (both stocks live through Tencent quotes and Eastmoney corporate actions; persistence disabled)
@@ -223,6 +232,9 @@ Historical production/runtime checks (not rerun as part of the 2026-07-21 workin
 - Grid/flex children that contain stock names, money values, or long badges should usually have `min-width: 0`, stable card dimensions, and overflow handling before adding more visual styling.
 - Local Vite is useful for frontend layout, but full auth/positions API verification should use `vercel dev` or production because the frontend calls `/api/*`.
 - The user's GitHub token must never be written into repo files, logs, remotes, or docs. Prefer SSH or existing HTTPS credentials; if HTTPS is needed, avoid embedding tokens in remote URLs.
+- Bcrypt password hashes cannot reveal the original password. Verify a user-provided candidate with `verifyPassword`, or rotate to a new hash with `hashPassword`; never expose the stored hash or persist the plaintext during maintenance.
+- Moving `.git` into a parent directory expands the Git worktree boundary. Any pre-existing sibling directories then appear as untracked files; preserve machine-local data and use `.git/info/exclude` for local-only exclusions instead of adding those paths to the shared `.gitignore` without a project-level reason.
+- Windows will not remove an otherwise empty directory while a terminal still uses it as its current working directory. Start the replacement terminal from the new repository root or close the old terminal before removing the empty directory.
 - The machine-level Git proxy can be stale (`127.0.0.1:10808` was unavailable). For one-off GitHub operations, `git -c http.proxy= -c https.proxy= ...` can bypass that config without changing global settings.
 - 2026-07-18 push friction: SSH to github.com port 22 is blocked in this environment and no SSH key exists locally, so `origin` was switched to HTTPS. The system credential.helper chain (`manager` + `store`) produced 401/403 on push even though the stored PATs are valid; pushing works reliably with `GIT_ASKPASS` pointing at a throwaway script that feeds a token read from `~/.git-credentials`, combined with `-c credential.helper=`. Never echo tokens into logs or commit them.
 - Vercel builds resolve devDependency types themselves: `@types/pg` was only available transitively (via drizzle-orm) locally, and the first production build failed `typecheck:server` with TS7016 until it was declared explicitly in `devDependencies`.
@@ -328,7 +340,7 @@ Database files:
 
 ## Suggested Workflow For The Next AI
 
-1. Read `AGENTS.md`
+1. Start from the repository root (`D:\code_zhuan` on the current machine) and read `AGENTS.md`
 2. Read this `HANDOFF.md`
 3. Check `src/App.vue` and `shared/stocks.ts`
 4. Check `lib/server/*` and `api/*`
