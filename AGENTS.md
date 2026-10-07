@@ -127,6 +127,9 @@ Default target total market cap list in MVP:
 
 - Keep changes minimal and pragmatic.
 - Keep the UI concise and tool-first; avoid unnecessary marketing copy in primary screens.
+- Visual direction is minimal black/white/gray, with current total return as the primary number and compact stock selectors. Keep profit/loss colors readable in both appearances.
+- Support light/dark appearance. First visit follows the system preference; an explicit choice is stored independently in `zhuanduoshao_theme` and must not reset position drafts or authentication state. Restore it before first paint.
+- The position editor is initially expanded; secondary corporate-action status, reverse projection, and the detailed comparison table may be collapsed while remaining accessible.
 - Treat mobile as the primary layout; after mobile UI changes, verify around 390px width and check that the document has no horizontal overflow.
 - Keep target market-cap UI input in `万亿元`, but keep internal scenario calculations normalized to the existing `亿元` target values unless the whole calculation model is intentionally migrated.
 - Quotes auto-refresh every 30s only during A-share trading sessions (09:30-11:30, 13:00-15:00 China time, weekdays) and only while the page is visible; holidays are not modeled.

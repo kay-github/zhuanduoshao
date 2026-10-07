@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { StockCode, StockQuote } from '../../shared/stocks'
 import {
   formatCurrency,
@@ -7,7 +8,7 @@ import {
   profitClass,
 } from '../utils/financial-formatters'
 
-defineProps<{
+const props = defineProps<{
   stocks: StockQuote[]
   selectedCode: StockCode
   timeText: string
@@ -18,6 +19,8 @@ defineProps<{
   statusText: string
 }>()
 
+const activeStock = computed(() => props.stocks.find(stock => stock.code === props.selectedCode))
+
 defineEmits<{
   refresh: []
   select: [code: StockCode]
@@ -26,56 +29,38 @@ defineEmits<{
 
 <template>
   <section class="hero-card panel">
-    <div class="card-header stock-header">
-      <div>
-        <h3>行情</h3>
-      </div>
-
-      <div class="header-actions">
+    <div class="stock-header">
         <span class="header-time">{{ sessionText }} · {{ timeText }}</span>
         <button class="text-button" type="button" :disabled="pending" @click="$emit('refresh')">
           {{ pending ? '刷新中...' : '刷新行情' }}
         </button>
-      </div>
     </div>
 
-    <p :class="['status-text', { 'is-negative': error || isFallback }]">{{ statusText }}</p>
+    <p :class="['status-text', 'quote-status', { 'is-negative': error, 'is-fallback': isFallback }]">{{ statusText }}</p>
 
-    <div class="stock-grid">
+    <div class="stock-grid" role="group" aria-label="选择股票">
       <button
         v-for="stock in stocks"
         :key="stock.code"
         type="button"
         :class="['stock-card', { 'is-active': stock.code === selectedCode }]"
+        :aria-pressed="stock.code === selectedCode"
         @click="$emit('select', stock.code)"
       >
-        <div class="stock-card-top">
-          <div>
-            <strong class="stock-card-name">{{ stock.name }}</strong>
-            <span class="stock-card-code">{{ stock.code }}</span>
-          </div>
-          <span :class="['stock-change', profitClass(stock.priceChangePct)]">
-            {{ formatPercent(stock.priceChangePct / 100) }}
-          </span>
-        </div>
-
-        <div class="stock-card-metrics">
-          <article>
-            <span>最新价</span>
-            <strong :class="['compact-number', profitClass(stock.priceChangePct)]">
-              {{ formatCurrency(stock.latestPrice) }}
-            </strong>
-          </article>
-          <article>
-            <span>总市值</span>
-            <strong class="compact-number">{{ formatMarketCapFromYuan(stock.totalMarketCap) }}</strong>
-          </article>
-        </div>
-
-        <div class="stock-card-footer">
-          <span v-if="stock.code === selectedCode" class="stock-card-state">当前</span>
-        </div>
+        <strong class="stock-card-name">{{ stock.name }}</strong>
+        <span class="stock-card-code">{{ stock.code }}</span>
       </button>
+    </div>
+    <div v-if="activeStock" class="active-quote">
+      <div>
+        <h2>{{ activeStock.name }}</h2>
+        <span class="stock-card-code">{{ activeStock.code }} · 深交所</span>
+      </div>
+      <div class="quote-price-block">
+        <strong class="quote-price">{{ formatCurrency(activeStock.latestPrice) }}</strong>
+        <span :class="['stock-change', profitClass(activeStock.priceChangePct)]">{{ formatPercent(activeStock.priceChangePct / 100) }}</span>
+        <span class="quote-market-cap">总市值 {{ formatMarketCapFromYuan(activeStock.totalMarketCap) }}</span>
+      </div>
     </div>
   </section>
 </template>

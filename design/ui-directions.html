@@ -1,0 +1,330 @@
+<style>
+  #zds-directions { width:100%; }
+  #zds-directions .z-stage { min-height:1460px; padding:20px 0 16px; }
+  #zds-directions .z-page {
+    --z-bg:light-dark(#fff,#171819); --z-ink:light-dark(#202124,#edf0f4);
+    --z-muted:light-dark(#6c727c,#a0a6af); --z-line:light-dark(#e8e9ed,#35373d);
+    --z-soft:light-dark(#f5f6f8,#24262b); --z-blue:light-dark(#0767dd,#80b4ff);
+    --z-tint:light-dark(#edf4ff,#202d42); --z-up:light-dark(#c72e41,#ff8d99);
+    --z-down:light-dark(#17734e,#70d5ac);
+    background:var(--z-bg); color:var(--z-ink); width:min(390px,100%); margin:0 auto;
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+    font-size:14px; line-height:1.5; border:1px solid var(--z-line); border-radius:24px;
+    font-weight:400; box-shadow:0 10px 28px light-dark(#1425400c,#00000020);
+  }
+  #zds-directions .z-page * { box-sizing:border-box; }
+  #zds-directions .z-page [hidden] { display:none !important; }
+  #zds-directions .z-page h1,#zds-directions .z-page h2,#zds-directions .z-page h3,#zds-directions .z-page p { margin:0; }
+  #zds-directions .z-page h1 { font-size:17px; font-weight:650; letter-spacing:-.5px; }
+  #zds-directions .z-page h2 { font-size:22px; font-weight:650; letter-spacing:-.7px; }
+  #zds-directions .z-page h3 { font-size:15px; font-weight:600; }
+  #zds-directions .z-page button,#zds-directions .z-page input,#zds-directions .z-page select { font:inherit; }
+  #zds-directions .z-page button { color:inherit; }
+  #zds-directions .z-page button:focus-visible,#zds-directions .z-page input:focus-visible,#zds-directions .z-page select:focus-visible,#zds-directions .z-page summary:focus-visible { outline:3px solid var(--z-blue); outline-offset:3px; }
+  #zds-directions .z-page .z-bar { display:flex; align-items:center; justify-content:space-between; gap:16px; min-height:68px; padding:0 22px; border-bottom:1px solid var(--z-line); }
+  #zds-directions .z-brand { display:flex; align-items:center; gap:9px; }
+  #zds-directions .z-symbol { width:27px;height:27px;display:grid;place-items:center; background:var(--z-ink);color:var(--z-bg);border-radius:8px;font-size:16px;font-weight:600; }
+  #zds-directions .z-login { background:transparent;border:0;color:var(--z-blue)!important;font-size:13px!important;min-height:44px;padding:0 8px; }
+  #zds-directions .z-body { padding:22px; }
+  #zds-directions .z-page .z-preview { display:flex;align-items:center;gap:6px;font-size:11px;color:var(--z-muted);margin-bottom:18px; }
+  #zds-directions .z-preview::before { content:'';width:5px;height:5px;background:var(--z-muted);border-radius:50%; }
+  #zds-directions .z-muted { color:var(--z-muted); }
+  #zds-directions .z-num { font-variant-numeric:tabular-nums;letter-spacing:-.4px; }
+  #zds-directions .z-positive { color:var(--z-up)!important; }
+  #zds-directions .z-negative { color:var(--z-down)!important; }
+  #zds-directions .z-stock-tabs { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;background:var(--z-soft);padding:4px;border-radius:11px;margin-bottom:22px; }
+  #zds-directions .z-stock-tabs button { border:0;background:transparent;min-height:43px;border-radius:8px;font-size:13px; }
+  #zds-directions .z-stock-tabs button[aria-pressed=true] { background:var(--z-bg);box-shadow:0 1px 5px light-dark(#00000013,#00000045);font-weight:600; }
+  #zds-directions .z-quote { display:flex;justify-content:space-between;align-items:flex-end;gap:12px; }
+  #zds-directions .z-code { color:var(--z-muted);font-size:11px;letter-spacing:.7px;margin-top:3px!important; }
+  #zds-directions .z-quote-side { text-align:right; }
+  #zds-directions .z-quote-price { font-size:22px;font-weight:600; }
+  #zds-directions .z-quote-cap { color:var(--z-muted);font-size:11px; }
+  #zds-directions .z-overview { padding:25px 0 23px; }
+  #zds-directions .z-label { display:block;font-size:12px;color:var(--z-muted); }
+  #zds-directions .z-big { display:block;font-size:42px;line-height:1.25;font-weight:600;letter-spacing:-1.7px;margin:7px 0; }
+  #zds-directions .z-rate { font-size:12px; }
+  #zds-directions .z-metrics { display:grid;grid-template-columns:1fr 1fr;gap:14px 20px;margin-top:21px; }
+  #zds-directions .z-metrics strong { display:block;font-size:16px;line-height:1.6;font-weight:550; }
+  #zds-directions .z-section-head { display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:16px; }
+  #zds-directions .z-caption { font-size:11px;color:var(--z-muted); }
+  #zds-directions .z-editor { border-top:1px solid var(--z-line);padding-top:20px; }
+  #zds-directions .z-fields { display:grid;grid-template-columns:1fr 1fr;gap:12px; }
+  #zds-directions .z-field { min-width:0; }
+  #zds-directions .z-field>span { display:block;color:var(--z-muted);font-size:11px;margin-bottom:7px; }
+  #zds-directions .z-input { display:flex;align-items:center;border:1px solid var(--z-line);border-radius:9px;background:var(--z-bg);height:44px;min-width:0;padding-right:11px; }
+  #zds-directions .z-input input { width:100%;min-width:0;border:0;background:transparent;color:var(--z-ink);padding:10px 11px;font-size:16px;outline-offset:-2px!important; }
+  #zds-directions .z-input em { font-size:11px;font-style:normal;color:var(--z-muted);white-space:nowrap; }
+  #zds-directions .z-advanced { margin-top:12px;color:var(--z-muted);font-size:11px; }
+  #zds-directions .z-advanced summary { min-height:34px;display:flex;align-items:center;gap:6px;list-style:none; }
+  #zds-directions .z-advanced summary::after { content:'⌄';font-size:15px; }
+  #zds-directions .z-advanced[open] summary::after { content:'⌃'; }
+  #zds-directions .z-advanced .z-fields { margin:9px 0 10px; }
+  #zds-directions .z-advanced input,#zds-directions .z-advanced select { width:100%;min-width:0;color:var(--z-ink);background:var(--z-bg);border:1px solid var(--z-line);border-radius:8px;min-height:44px;padding:7px;font-size:13px; }
+  #zds-directions .z-actions { display:flex;align-items:center;justify-content:space-between;gap:10px;margin:6px 0 4px; }
+  #zds-directions .z-sample,#zds-directions .z-reset { background:transparent;border:0;min-height:36px;font-size:12px;padding:0;color:var(--z-blue)!important; }
+  #zds-directions .z-error { color:var(--z-up);font-size:11px;min-height:17px; }
+  #zds-directions .z-error:empty { display:none; }
+  #zds-directions .z-scenarios { border-top:1px solid var(--z-line);padding-top:21px;margin-top:19px; }
+  #zds-directions .z-targets { display:flex;flex-wrap:wrap;gap:6px; }
+  #zds-directions .z-targets button { min-width:43px;min-height:39px;border:1px solid var(--z-line);border-radius:8px;background:transparent;padding:5px 9px;font-size:12px; }
+  #zds-directions .z-targets button[aria-pressed=true] { border-color:var(--z-blue);background:var(--z-tint);color:var(--z-blue);font-weight:600; }
+  #zds-directions .z-custom { display:grid;grid-template-columns:1fr 1.12fr;align-items:center;gap:10px;margin:14px 0; }
+  #zds-directions .z-custom .z-label { color:var(--z-ink); }
+  #zds-directions .z-result { background:var(--z-soft);padding:16px;border-radius:12px;margin-top:14px; }
+  #zds-directions .z-result-top { display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:11px;color:var(--z-muted); }
+  #zds-directions .z-result-profit { display:block;font-size:27px;font-weight:600;margin:5px 0 12px;letter-spacing:-1px; }
+  #zds-directions .z-result-bottom { display:grid;grid-template-columns:1fr 1fr;gap:10px; }
+  #zds-directions .z-result-bottom strong { display:block;font-size:14px;font-weight:550;margin-top:3px; }
+  #zds-directions .z-notes { border-top:1px solid var(--z-line);padding-top:16px;margin-top:22px;color:var(--z-muted);font-size:11px;line-height:1.7; }
+  #zds-directions .z-notes p+p { margin-top:5px; }
+  #zds-directions .z-cloud { --z-bg:light-dark(#f8faff,#141c2b);--z-soft:light-dark(#fff,#202a3c);--z-tint:light-dark(#eaf2ff,#213653);border-radius:24px; }
+  #zds-directions .z-cloud .z-symbol { border-radius:50%;background:var(--z-blue);color:var(--z-bg); }
+  #zds-directions .z-cloud .z-bar { border:0; }
+  #zds-directions .z-cloud .z-body { padding-top:12px; }
+  #zds-directions .z-cloud .z-stock-tabs { padding:0;background:transparent;gap:9px;margin-bottom:18px; }
+  #zds-directions .z-cloud .z-stock-tabs button { display:flex;flex-direction:column;align-items:flex-start;text-align:left;border:1px solid var(--z-line);border-radius:13px;padding:10px 13px;background:var(--z-soft); }
+  #zds-directions .z-cloud .z-stock-tabs button span { font-size:11px;color:var(--z-muted);font-weight:400;margin-top:3px; }
+  #zds-directions .z-cloud .z-stock-tabs button[aria-pressed=true] { background:var(--z-tint);border-color:var(--z-blue);box-shadow:none;color:var(--z-blue); }
+  #zds-directions .z-cloud .z-focus { background:var(--z-tint);border-radius:19px;padding:20px;margin-bottom:16px; }
+  #zds-directions .z-cloud .z-focus h2 { font-size:20px; }
+  #zds-directions .z-cloud .z-focus .z-label { margin-top:21px; }
+  #zds-directions .z-cloud .z-big { font-size:37px; }
+  #zds-directions .z-cloud .z-targets { margin-top:17px;gap:5px; }
+  #zds-directions .z-cloud .z-targets button { border:0;background:var(--z-bg);border-radius:20px;min-height:36px;min-width:41px;padding:5px 8px;font-size:11px; }
+  #zds-directions .z-cloud .z-targets button[aria-pressed=true] { background:var(--z-blue);color:var(--z-bg); }
+  #zds-directions .z-cloud .z-focus .z-result-bottom { padding-top:14px;margin-top:17px;border-top:1px solid light-dark(#ccd9f0,#40536d); }
+  #zds-directions .z-cloud .z-input { background:var(--z-soft);border-radius:10px; }
+  #zds-directions .z-cloud .z-sheet { background:var(--z-soft);border-radius:16px;padding:19px;margin-top:15px; }
+  #zds-directions .z-cloud .z-editor,#zds-directions .z-cloud .z-scenarios { border:0;margin:0;padding:0; }
+  #zds-directions .z-current-row { display:flex;justify-content:space-between;gap:8px;align-items:center;padding:13px 0;border-top:1px solid var(--z-line);border-bottom:1px solid var(--z-line);font-size:11px; }
+  #zds-directions .z-current-row strong { display:block;font-size:15px;font-weight:550;margin-top:2px; }
+  #zds-directions .z-compare { width:100%;border-collapse:collapse;font-size:12px; }
+  #zds-directions .z-compare th { color:var(--z-muted);font-weight:400;font-size:11px;text-align:right;padding:0 0 9px; }
+  #zds-directions .z-compare th:first-child,#zds-directions .z-compare td:first-child { text-align:left; }
+  #zds-directions .z-compare td { text-align:right;padding:11px 0;border-top:1px solid var(--z-line);font-variant-numeric:tabular-nums; }
+  #zds-directions .z-cloud .z-notes { margin-top:16px;border:0; }
+  #zds-directions .z-workbench { --z-bg:light-dark(#f4f5f7,#111214);--z-soft:light-dark(#fff,#1b1d21);--z-blue:light-dark(#465bd3,#b2baff);--z-tint:light-dark(#edf0ff,#272b42);border-radius:13px; }
+  #zds-directions .z-workbench .z-symbol { border-radius:5px;background:var(--z-blue); }
+  #zds-directions .z-workbench .z-bar { min-height:62px;padding:0 18px;background:var(--z-soft);border-radius:13px 13px 0 0; }
+  #zds-directions .z-workbench .z-login { color:var(--z-ink)!important;border:1px solid var(--z-line);border-radius:6px;min-height:32px;padding:3px 12px; }
+  #zds-directions .z-workbench .z-body { padding:18px; }
+  #zds-directions .z-workbench .z-stock-tabs { background:transparent;border-bottom:1px solid var(--z-line);border-radius:0;padding:0;gap:12px;margin-bottom:20px; }
+  #zds-directions .z-workbench .z-stock-tabs button { border-radius:0;box-shadow:none!important;text-align:left;color:var(--z-muted);border-bottom:2px solid transparent; }
+  #zds-directions .z-workbench .z-stock-tabs button[aria-pressed=true] { border-bottom-color:var(--z-blue);color:var(--z-ink);background:transparent; }
+  #zds-directions .z-workbench .z-quote h2 { font-size:19px; }
+  #zds-directions .z-workbench .z-quote-price { font-size:19px; }
+  #zds-directions .z-workbench .z-overview { background:var(--z-soft);border:1px solid var(--z-line);border-radius:8px;padding:17px;margin:17px 0 16px; }
+  #zds-directions .z-workbench .z-big { font-size:33px;margin:3px 0; }
+  #zds-directions .z-workbench .z-metrics { gap:12px;margin-top:16px;padding-top:12px;border-top:1px solid var(--z-line); }
+  #zds-directions .z-workbench .z-metrics strong { font-size:14px; }
+  #zds-directions .z-workbench .z-editor { border:0;padding:0; }
+  #zds-directions .z-workbench .z-section-head { margin-bottom:10px; }
+  #zds-directions .z-workbench .z-input { border-radius:6px;background:var(--z-soft);height:41px; }
+  #zds-directions .z-workbench .z-advanced { margin-top:8px; }
+  #zds-directions .z-workbench .z-scenarios { padding-top:17px;margin-top:13px; }
+  #zds-directions .z-workbench .z-compare { background:var(--z-soft);border:1px solid var(--z-line); }
+  #zds-directions .z-workbench .z-compare td,#zds-directions .z-workbench .z-compare th { padding:9px 10px; }
+  #zds-directions .z-workbench .z-compare tr[data-selected=true] td { background:var(--z-tint); }
+  #zds-directions .z-row-pick { border:0;background:transparent;color:var(--z-ink);padding:0;min-height:26px;font-size:12px; }
+  #zds-directions .z-workbench .z-custom { margin:12px 0; }
+  #zds-directions .z-reverse { margin-top:18px; }
+  #zds-directions .z-reverse .z-label { margin-bottom:7px; }
+  #zds-directions .z-reverse-text { font-size:11px;color:var(--z-muted);margin-top:8px!important; }
+  #zds-directions .z-workbench .z-notes { margin-top:15px; }
+  #zds-directions .z-dialog { border:1px solid var(--z-line);border-radius:12px;background:var(--z-soft);padding:16px;margin-top:16px; }
+  #zds-directions .z-dialog p { font-size:12px;color:var(--z-muted);margin:6px 0 10px; }
+  #zds-directions .z-dialog button { background:var(--z-blue);color:var(--z-bg);border:0;border-radius:7px;padding:8px 14px; }
+  #zds-directions[data-device=desktop] .z-page { width:100%;max-width:960px;border-radius:14px; }
+  #zds-directions[data-device=desktop] .z-body { padding:28px 32px; }
+  #zds-directions[data-device=desktop] .z-apple .z-columns { display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);gap:44px; }
+  #zds-directions[data-device=desktop] .z-apple .z-scenarios { border:0;padding-top:25px;margin:0; }
+  #zds-directions[data-device=desktop] .z-apple .z-overview { padding-top:28px; }
+  #zds-directions[data-device=desktop] .z-cloud .z-columns { display:grid;grid-template-columns:minmax(0,1.06fr) minmax(0,1fr);gap:25px; }
+  #zds-directions[data-device=desktop] .z-cloud .z-focus { margin-bottom:0; }
+  #zds-directions[data-device=desktop] .z-cloud .z-sheet:first-child { margin-top:0; }
+  #zds-directions[data-device=desktop] .z-cloud .z-big { font-size:45px;margin-top:16px; }
+  #zds-directions[data-device=desktop] .z-workbench .z-columns { display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:28px; }
+  #zds-directions[data-device=desktop] .z-workbench .z-scenarios { margin:0;padding:17px 0 0;border:0; }
+  #zds-directions[data-device=desktop] .z-stage { min-height:960px; }
+  @media(max-width:600px) {
+    #zds-directions .z-stage { min-height:1480px;padding-top:10px; }
+    #zds-directions .z-page { border-radius:17px; }
+    #zds-directions[data-device=desktop] .z-body { padding:20px; }
+    #zds-directions[data-device=desktop] .z-page .z-columns { display:block; }
+    #zds-directions[data-device=desktop] .z-apple .z-scenarios { border-top:1px solid var(--z-line);margin-top:18px; }
+    #zds-directions[data-device=desktop] .z-cloud .z-sheet:first-child { margin-top:16px; }
+    #zds-directions[data-device=desktop] .z-cloud .z-big { font-size:37px; }
+    #zds-directions[data-device=desktop] .z-workbench .z-scenarios { border-top:1px solid var(--z-line);margin-top:14px; }
+    #zds-directions[data-device=desktop] .z-stage { min-height:1480px; }
+  }
+  @media(max-width:360px) {
+    #zds-directions .z-body { padding:17px; }
+    #zds-directions .z-big { font-size:35px; }
+    #zds-directions .z-cloud .z-focus { padding:17px; }
+    #zds-directions .z-cloud .z-big { font-size:32px; }
+    #zds-directions .z-workbench .z-compare td,#zds-directions .z-workbench .z-compare th { padding:9px 7px; }
+  }
+  @media(pointer:coarse) {
+    #zds-directions .z-page button,#zds-directions .z-page summary { min-height:44px!important; }
+    #zds-directions .z-targets { gap:6px; }
+  }
+</style>
+<div id="zds-directions" data-device="mobile" aria-label="赚多少界面方案">
+  <div class="viz-carousel viz-dotted-background" aria-label="赚多少三份界面方案" data-previous-label="上一方案" data-next-label="下一方案">
+    <section class="z-stage" data-variant="极简留白" aria-label="Apple 风格的极简留白方案">
+      <article class="z-page z-apple" data-design="apple" aria-label="极简留白界面">
+        <header class="z-bar"><div class="z-brand"><span class="z-symbol" aria-hidden="true">↗</span><h1>赚多少</h1></div><button class="z-login cursor-interaction" type="button" data-login>登录 <span aria-hidden="true">↗</span></button></header>
+        <main class="z-body">
+          <p class="z-preview">界面预览 · 参考行情 2026-07-18</p>
+          <div data-slot="stocks"></div>
+          <div data-slot="quote"></div>
+          <div class="z-columns">
+            <div><section class="z-overview"><span class="z-label">当前总收益</span><strong class="z-big z-num" data-value="profit">¥0.00</strong><p class="z-rate" data-value="rate">收益率 0.00%</p><div data-slot="metrics"></div></section><div data-slot="editor"></div></div>
+            <section class="z-scenarios"><div class="z-section-head"><h3>如果市值达到</h3><span class="z-caption">万亿元</span></div><div data-slot="targets"></div><div data-slot="custom"></div><div class="z-result" aria-live="polite"><div class="z-result-top"><span>预计总收益</span><span data-value="targetLabel">目标 1.5 万亿</span></div><strong class="z-result-profit z-num" data-value="future">¥0.00</strong><div class="z-result-bottom"><div><span class="z-label">对应股价</span><strong data-value="targetPrice">¥1,075.76</strong></div><div><span class="z-label">从现在新增</span><strong data-value="additional">¥0.00</strong></div></div></div><div data-slot="reverse"></div></section>
+          </div><div data-slot="notes"></div><div data-slot="login"></div>
+        </main>
+      </article>
+    </section>
+    <section class="z-stage" data-variant="轻盈蓝调" aria-label="Google 风格的轻盈蓝调方案" hidden>
+      <article class="z-page z-cloud" data-design="cloud" aria-label="轻盈蓝调界面">
+        <header class="z-bar"><div class="z-brand"><span class="z-symbol" aria-hidden="true">↗</span><h1>赚多少</h1></div><button class="z-login cursor-interaction" type="button" data-login>登录</button></header>
+        <main class="z-body"><p class="z-preview">界面预览 · 参考行情 2026-07-18</p><div data-slot="stocks"></div>
+          <div class="z-columns">
+            <section class="z-focus"><div class="z-section-head"><h2>收益推演</h2><span class="z-caption" data-value="stockName">新易盛</span></div><p class="z-caption">目标总市值 / 万亿元</p><div data-slot="targets"></div><span class="z-label">预计总收益</span><strong class="z-big z-num" data-value="future">¥0.00</strong><p class="z-rate" data-value="futureRate">总收益率 0.00%</p><div class="z-result-bottom"><div><span class="z-label">对应股价</span><strong data-value="targetPrice">¥1,075.76</strong></div><div><span class="z-label">从现在新增</span><strong data-value="additional">¥0.00</strong></div></div><div data-slot="custom"></div></section>
+            <div><section class="z-sheet"><div data-slot="editor"></div><div class="z-current-row"><div><span class="z-muted">当前收益</span><strong class="z-num" data-value="profit">¥0.00</strong></div><div><span class="z-muted">最新股价</span><strong class="z-num" data-value="price">¥482.88</strong></div><div><span class="z-muted">总市值</span><strong data-value="cap">6,733 亿</strong></div></div></section><section class="z-sheet"><div class="z-section-head"><h3>情景对比</h3><span class="z-caption">总收益</span></div><table class="z-compare" aria-label="三个目标市值的收益对比"><thead><tr><th>市值 / 万亿</th><th>股价 / 元</th><th>总收益 / 万元</th></tr></thead><tbody data-comparison="brief"></tbody></table></section></div>
+          </div><div data-slot="notes"></div><div data-slot="login"></div>
+        </main>
+      </article>
+    </section>
+    <section class="z-stage" data-variant="紧凑工作台" aria-label="Microsoft 风格的紧凑工作台方案" hidden>
+      <article class="z-page z-workbench" data-design="workbench" aria-label="紧凑工作台界面">
+        <header class="z-bar"><div class="z-brand"><span class="z-symbol" aria-hidden="true">↗</span><h1>赚多少<span class="z-caption" style="margin-left:8px;font-weight:400">工作台</span></h1></div><button class="z-login cursor-interaction" type="button" data-login>登录</button></header>
+        <main class="z-body"><p class="z-preview">界面预览 · 参考行情 2026-07-18</p><div data-slot="stocks"></div><div data-slot="quote"></div>
+          <div class="z-columns">
+            <div><section class="z-overview"><span class="z-label">当前总收益</span><strong class="z-big z-num" data-value="profit">¥0.00</strong><p class="z-rate" data-value="rate">收益率 0.00%</p><div data-slot="metrics"></div></section><div data-slot="editor"></div></div>
+            <section class="z-scenarios"><div class="z-section-head"><h3>市值情景</h3><span class="z-caption">按总市值测算</span></div><table class="z-compare" aria-label="目标市值情景表"><thead><tr><th>市值 / 万亿</th><th>股价 / 元</th><th>总收益 / 万元</th></tr></thead><tbody data-comparison="full"></tbody></table><div data-slot="custom"></div><p class="z-reverse-text">所选情景较现在新增 <strong data-value="additional">¥0.00</strong></p><div data-slot="reverse"></div></section>
+          </div><div data-slot="notes"></div><div data-slot="login"></div>
+        </main>
+      </article>
+    </section>
+  </div>
+  <template id="zds-stocks"><div class="z-stock-tabs" role="group" aria-label="选择股票"><button class="cursor-interaction" type="button" data-stock="300502" aria-pressed="true">新易盛<span data-stock-sub="300502"></span></button><button class="cursor-interaction" type="button" data-stock="300308" aria-pressed="false">中际旭创<span data-stock-sub="300308"></span></button></div></template>
+  <template id="zds-quote"><div class="z-quote"><div><h2 data-value="stockName">新易盛</h2><p class="z-code" data-value="code">300502 · 深交所</p></div><div class="z-quote-side"><div class="z-quote-price z-num" data-value="price">¥482.88</div><p class="z-quote-cap" data-value="capLong">总市值 6,733 亿</p></div></div></template>
+  <template id="zds-metrics"><div class="z-metrics"><div><span class="z-label">持仓市值</span><strong class="z-num" data-value="value">¥0.00</strong></div><div><span class="z-label">原始成本</span><strong class="z-num" data-value="cost">¥0.00</strong></div><div><span class="z-label">有效持仓</span><strong class="z-num" data-value="quantity">0 股</strong></div><div><span class="z-label">税后分红</span><strong class="z-num">¥0.00</strong></div></div></template>
+  <template id="zds-editor"><section class="z-editor"><div class="z-section-head"><h3>我的持仓</h3><span class="z-caption">未登录</span></div><div class="z-fields"><label class="z-field"><span>原始持仓数量</span><div class="z-input"><input data-input="quantity" type="number" inputmode="numeric" value="0" min="0" max="10000000" step="1" aria-label="原始持仓数量"><em>股</em></div></label><label class="z-field"><span>原始成本价</span><div class="z-input"><input data-input="cost" type="number" inputmode="decimal" value="0" min="0" max="1000000" step="0.0001" aria-label="原始成本价"><em>元</em></div></label></div><details class="z-advanced"><summary class="cursor-interaction">基准日期与红利税 <span data-value="taxSummary">超 1 年 · 免税</span></summary><div class="z-fields"><label class="z-field"><span>持仓基准日</span><input type="date" data-input="date" aria-label="持仓基准日"></label><label class="z-field"><span>红利税档位</span><select data-input="tax" aria-label="红利税档位"><option value="0">超 1 年 · 免税</option><option value="0.1">1 个月–1 年 · 10%</option><option value="0.2">不足 1 个月 · 20%</option></select></label></div><p>填写基准日原始数量和成本，避免重复计入分红送转。此预览无分红送转数据。</p></details><div class="z-actions"><button class="z-sample cursor-interaction" data-sample type="button">填入示例</button><button class="z-reset cursor-interaction" data-reset type="button">清空持仓</button></div><p class="z-error" data-error role="alert"></p></section></template>
+  <template id="zds-targets"><div class="z-targets" role="group" aria-label="目标总市值，单位万亿元"><button class="cursor-interaction" type="button" data-target="1" aria-pressed="false">1.0</button><button class="cursor-interaction" type="button" data-target="1.2" aria-pressed="false">1.2</button><button class="cursor-interaction" type="button" data-target="1.3" aria-pressed="false">1.3</button><button class="cursor-interaction" type="button" data-target="1.5" aria-pressed="true">1.5</button><button class="cursor-interaction" type="button" data-target="1.8" aria-pressed="false">1.8</button><button class="cursor-interaction" type="button" data-target="2" aria-pressed="false">2.0</button></div></template>
+  <template id="zds-custom"><label class="z-custom"><span class="z-label">自定义目标市值</span><div class="z-input"><input type="number" data-input="target" inputmode="decimal" value="1.5" min="0.01" max="100" step="0.1" aria-label="自定义目标市值"><em>万亿</em></div></label></template>
+  <template id="zds-reverse"><div class="z-reverse"><label class="z-field"><span>想赚多少？反推目标</span><div class="z-input"><input data-input="desired" type="number" inputmode="decimal" min="0" step="1" placeholder="输入目标总收益" aria-label="目标总收益"><em>万元</em></div></label><p class="z-reverse-text" data-value="reverse" aria-live="polite">输入持仓后，可反推所需股价和总市值。</p></div></template>
+  <template id="zds-notes"><footer class="z-notes"><p>现金分红按持股期限扣税：超 1 年 0%，1 个月–1 年 10%，不足 1 个月 20%。</p><p>仅应用已实施分红送转，不假设未来公司行动；未计佣金及印花税。数据与推演仅供估算，不构成投资建议。</p></footer></template>
+  <template id="zds-login"><section class="z-dialog" data-login-panel hidden aria-label="账号入口预览"><h3>登录后同步持仓</h3><p>这是界面预览，账号功能沿用正式项目。注册时会提示：密码不支持找回，请妥善保管。</p><button class="cursor-interaction" type="button" data-close-login>知道了</button></section></template>
+</div>
+<script>
+(() => {
+  const root = document.getElementById('zds-directions');
+  const designs = Array.from(root.querySelectorAll('[data-design]'));
+  const stocks = {
+    '300502': { name:'新易盛', price:482.88, capYi:6733, sampleCost:350 },
+    '300308': { name:'中际旭创', price:979.46, capYi:10923, sampleCost:700 }
+  };
+  const today = new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+  const money = value => '¥' + value.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});
+  const percent = value => (value>0?'+':'')+(value*100).toFixed(2)+'%';
+  const capLabel = cap => cap>=10000 ? (cap/10000).toFixed(2)+' 万亿' : cap.toLocaleString('zh-CN')+' 亿';
+  const states = {};
+  const displayState = { device:'手机', appearance:'跟随外观' };
+  function persist() {
+    if(window.openai?.setWidgetState) window.openai.setWidgetState({modelContent:null,privateContent:{states,displayState}}).catch(()=>{});
+  }
+  function applyDisplay() {
+    root.dataset.device = displayState.device==='桌面'?'desktop':'mobile';
+    root.style.colorScheme = displayState.appearance==='浅色'?'light':displayState.appearance==='深色'?'dark':'';
+  }
+  function applySaved(saved) {
+    if(saved?.privateContent?.displayState) Object.assign(displayState,saved.privateContent.displayState);
+    for(const page of designs) {
+      const data = saved?.privateContent?.states?.[page.dataset.design];
+      if(data && stocks[data.code] && data.positions) {
+        for(const code of Object.keys(stocks)) {
+          const p=data.positions[code];
+          if(p && Number.isFinite(p.quantity) && p.quantity>=0 && p.quantity<=10000000 && Number.isFinite(p.cost) && p.cost>=0 && p.cost<=1000000 && [0,.1,.2].includes(p.tax)) states[page.dataset.design].positions[code] = {...states[page.dataset.design].positions[code],...p};
+        }
+        states[page.dataset.design].code=data.code;
+        if(Number.isFinite(data.target) && data.target>0 && data.target<=100) states[page.dataset.design].target=data.target;
+      }
+      update(page,true);
+    }
+    applyDisplay();
+  }
+  function update(page, sync=false) {
+    const state=states[page.dataset.design], quote=stocks[state.code], pos=state.positions[state.code];
+    const cost=pos.quantity*pos.cost, value=pos.quantity*quote.price, profit=value-cost;
+    const targetPrice=quote.price*(state.target*10000)/quote.capYi, future=pos.quantity*targetPrice-cost, additional=pos.quantity*(targetPrice-quote.price);
+    const numbers={stockName:quote.name,code:state.code+' · 深交所',price:money(quote.price),cap:capLabel(quote.capYi),capLong:'总市值 '+capLabel(quote.capYi),profit:money(profit),rate:'收益率 '+percent(cost?profit/cost:0),value:money(value),cost:money(cost),quantity:pos.quantity.toLocaleString('zh-CN')+' 股',future:money(future),futureRate:'总收益率 '+percent(cost?future/cost:0),targetPrice:money(targetPrice),additional:money(additional),targetLabel:'目标 '+state.target+' 万亿',taxSummary:pos.tax===0?'超 1 年 · 免税':pos.tax===.1?'1 个月–1 年 · 10%':'不足 1 个月 · 20%'};
+    for(const [name,text] of Object.entries(numbers)) page.querySelectorAll('[data-value="'+name+'"]').forEach(el=>el.textContent=text);
+    for(const [name,value] of Object.entries({profit,rate:profit,future,futureRate:future,additional})) page.querySelectorAll('[data-value="'+name+'"]').forEach(el=>{el.classList.toggle('z-positive',value>0);el.classList.toggle('z-negative',value<0);});
+    page.querySelectorAll('[data-stock]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.stock===state.code)));
+    page.querySelectorAll('[data-stock-sub]').forEach(el=>el.textContent=page.dataset.design==='cloud'?el.dataset.stockSub+' · '+money(stocks[el.dataset.stockSub].price):'');
+    page.querySelectorAll('[data-target]').forEach(button=>button.setAttribute('aria-pressed',String(Number(button.dataset.target)===state.target)));
+    if(sync) page.querySelectorAll('[data-input]').forEach(input=>{const key=input.dataset.input;input.value=key==='target'?state.target:key==='desired'?state.desired||'':key==='date'?pos.date:key==='tax'?pos.tax:pos[key];});
+    const tbody=page.querySelector('[data-comparison]');
+    if(tbody) {
+      const targets=tbody.dataset.comparison==='full'?[1,1.2,1.3,1.5,1.8,2]:[1.2,1.5,2];
+      tbody.replaceChildren(...targets.map(target=>{
+        const row=document.createElement('tr');row.dataset.selected=String(target===state.target);
+        const price=quote.price*(target*10000)/quote.capYi, total=pos.quantity*price-cost;
+        const label=document.createElement('td');const button=document.createElement('button');button.type='button';button.className='z-row-pick cursor-interaction';button.dataset.pick=String(target);button.textContent=target.toFixed(1);button.setAttribute('aria-label','目标市值 '+target+' 万亿元');button.setAttribute('aria-pressed',String(target===state.target));label.append(button);
+        const priceCell=document.createElement('td');priceCell.textContent=price.toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});
+        const profitCell=document.createElement('td');profitCell.textContent=(total/10000).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2});profitCell.className=total>0?'z-positive':total<0?'z-negative':'';
+        row.append(label,priceCell,profitCell);return row;
+      }));
+    }
+    const reverse=page.querySelector('[data-value="reverse"]');
+    if(reverse) {
+      const desired=Number(state.desired);
+      reverse.textContent=!state.desired?'输入持仓后，可反推所需股价和总市值。':pos.quantity===0?'请先输入非零持仓数量。':!Number.isFinite(desired)||desired<0?'请输入有效的目标收益。':(()=>{const price=(desired*10000+cost)/pos.quantity;return '所需股价 '+money(price)+' · 总市值 '+capLabel(price/quote.price*quote.capYi);})();
+    }
+    page.querySelector('[data-error]').textContent=pos.quantity>0&&pos.cost<=0?'非零持仓需填写正数成本价。':'';
+  }
+  for(const page of designs) {
+    page.querySelectorAll('[data-slot]').forEach(slot=>{slot.append(root.querySelector('#zds-'+slot.dataset.slot).content.cloneNode(true));});
+    page.querySelectorAll('[data-input="date"]').forEach(input=>input.max=today);
+    states[page.dataset.design]={code:'300502',target:1.5,desired:'',positions:{'300502':{quantity:0,cost:0,date:today,tax:0},'300308':{quantity:0,cost:0,date:today,tax:0}}};
+    page.addEventListener('click',event=>{
+      const button=event.target.closest('button');if(!button)return;
+      const state=states[page.dataset.design];
+      if(button.dataset.stock) state.code=button.dataset.stock;
+      else if(button.dataset.target||button.dataset.pick) state.target=Number(button.dataset.target||button.dataset.pick);
+      else if(button.hasAttribute('data-sample')) Object.assign(state.positions[state.code],{quantity:100,cost:stocks[state.code].sampleCost});
+      else if(button.hasAttribute('data-reset')) Object.assign(state.positions[state.code],{quantity:0,cost:0});
+      else if(button.hasAttribute('data-login')) {page.querySelector('[data-login-panel]').hidden=false;return;}
+      else if(button.hasAttribute('data-close-login')) {page.querySelector('[data-login-panel]').hidden=true;return;}
+      else return;
+      update(page,true);persist();
+    });
+    page.addEventListener('input',event=>{
+      const input=event.target, key=input.dataset.input;if(!key)return;
+      const state=states[page.dataset.design], pos=state.positions[state.code];
+      if(key==='date') pos.date=input.value;
+      else if(key==='desired') state.desired=input.value;
+      else {
+        const value=Number(input.value);
+        const max=key==='quantity'?10000000:key==='cost'?1000000:100;
+        if(!Number.isFinite(value)||value<0||value>max||(key==='target'&&value===0)||(key==='quantity'&&!Number.isInteger(value))) {page.querySelector('[data-error]').textContent='请填写范围内的有效数值。';return;}
+        if(key==='cost' && Math.abs(value*10000-Math.round(value*10000))>0.00001){page.querySelector('[data-error]').textContent='成本价最多保留四位小数。';return;}
+        if(key==='target') state.target=value;else pos[key]=value;
+      }
+      update(page);persist();
+    });
+    update(page,true);
+  }
+  applySaved(window.openai?.widgetState);
+  window.addEventListener('openai:set_globals',event=>{if(event.detail?.globals?.widgetState)applySaved(event.detail.globals.widgetState);});
+  if(globalThis.Tweak) {
+    const tweak=new Tweak({container:root,onChange:()=>{applyDisplay();persist();}});
+    tweak.addSelect(displayState,'device',{label:'预览尺寸',options:['手机','桌面']});
+    tweak.addSelect(displayState,'appearance',{label:'界面外观',options:['跟随外观','浅色','深色']});
+  }
+})();
+</script>
+

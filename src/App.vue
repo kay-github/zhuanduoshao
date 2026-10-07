@@ -141,7 +141,7 @@ const dividendSource = ref('')
 const positionsPending = ref(false)
 const positionSavePending = ref(false)
 const saveAllPending = ref(false)
-const positionEditorOpen = ref(false)
+const positionEditorOpen = ref(true)
 const selectedScenarioTargets = ref<number[]>([...defaultSelectedScenarioTargets])
 const positionMessage = ref('')
 const positionError = ref('')
@@ -1518,8 +1518,6 @@ function clearSyncedAnonymousDraft(stockCode: StockCode) {
 
 <template>
   <div class="app-shell">
-    <div class="bg-orb bg-orb-left"></div>
-    <div class="bg-orb bg-orb-right"></div>
 
     <AppHeader
       :user="user"
@@ -1556,13 +1554,17 @@ function clearSyncedAnonymousDraft(stockCode: StockCode) {
       <section class="panel position-card">
         <div class="card-header">
           <div>
-            <p class="section-kicker">持仓数据</p>
-            <h3>{{ activeStock.name }} 概览</h3>
+            <h3>当前总收益</h3>
           </div>
           <div class="position-header-meta">
             <span class="header-note">{{ activeStock.code }}</span>
             <span class="status-text">{{ user ? '已登录' : '未登录' }}</span>
           </div>
+        </div>
+
+        <div class="profit-summary">
+          <strong :class="['profit-headline', profitClass(currentProfit)]">{{ formatCurrency(currentProfit) }}</strong>
+          <p :class="['profit-rate', profitClass(currentProfit)]">收益率 {{ formatPercent(currentProfitPct) }}</p>
         </div>
 
         <div class="metric-strip position-metrics">
@@ -1579,24 +1581,14 @@ function clearSyncedAnonymousDraft(stockCode: StockCode) {
             <strong class="metric-number">{{ formatShareQuantity(adjustedPosition.quantity) }}</strong>
           </article>
           <article>
-            <span>累计分红</span>
+            <span>税后累计分红</span>
             <strong class="metric-number">{{ formatCurrency(adjustedPosition.cashDividendAmount) }}</strong>
-          </article>
-          <article>
-            <span>当前收益</span>
-            <strong :class="['metric-number', profitClass(currentProfit)]">{{ formatCurrency(currentProfit) }}</strong>
-          </article>
-          <article>
-            <span>当前收益率</span>
-            <strong :class="['metric-number', profitClass(currentProfit)]">{{ formatPercent(currentProfitPct) }}</strong>
           </article>
         </div>
 
         <div class="position-editor-summary">
           <div class="position-editor-copy">
-            <p class="section-kicker">编辑入口</p>
-            <h4>{{ positionEditorOpen ? '正在编辑持仓参数' : '点击展开后录入或调整持仓' }}</h4>
-            <p class="status-text">{{ positionAutoSummaryText }}</p>
+            <h4>我的持仓</h4>
           </div>
 
           <button
@@ -1606,9 +1598,10 @@ function clearSyncedAnonymousDraft(stockCode: StockCode) {
             aria-controls="position-editor-panel"
             @click="togglePositionEditor"
           >
-            {{ positionEditorOpen ? '收起持仓录入' : '录入 / 修改持仓' }}
+            {{ positionEditorOpen ? '收起' : '编辑持仓' }}
           </button>
         </div>
+        <p v-if="!positionEditorOpen" class="status-text position-summary-text">{{ positionAutoSummaryText }}</p>
 
         <p
           id="position-status"
@@ -1624,16 +1617,9 @@ function clearSyncedAnonymousDraft(stockCode: StockCode) {
           {{ positionStatusText }}
         </p>
 
-        <div class="corporate-action-summary">
-          <p :class="['status-text', { 'is-negative': dividendsError || dividendFreshness === 'fallback' }]">
-            {{ dividendStatusText }}
-          </p>
-          <strong>{{ corporateActionSummaryText }}</strong>
-        </div>
-
         <div v-if="positionEditorOpen" id="position-editor-panel" class="position-editor-panel">
           <p id="position-input-guidance" class="position-input-guidance">
-            请填写持仓基准日当天、尚未计入该日后分红送转的原始数量与成本价。若填写券商当前已送转或已摊薄的数据，会造成重复计算。
+            填写基准日原始数量与成本，勿重复填入送转后的股数或已摊薄的成本。
           </p>
 
           <div class="form-grid">
@@ -1682,20 +1668,13 @@ function clearSyncedAnonymousDraft(stockCode: StockCode) {
 
             <label>
               <span>红利税档位（按持股期限）</span>
-              <select v-model="activeDividendTaxBracket" aria-describedby="position-input-guidance">
+              <select v-model="activeDividendTaxBracket" :disabled="positionsPending || positionSavePending || saveAllPending || logoutPending" aria-describedby="position-input-guidance">
                 <option v-for="bracket in DIVIDEND_TAX_BRACKETS" :key="bracket.key" :value="bracket.key">
                   {{ bracket.label }} · {{ bracket.rate > 0 ? `${bracket.rate * 100}%` : '免税' }}
                 </option>
               </select>
             </label>
 
-            <label>
-              <span>自定义目标市值</span>
-              <div class="input-suffix">
-                <input v-model="customMarketCapWanYi" type="number" min="0" step="0.1" />
-                <em>万亿</em>
-              </div>
-            </label>
           </div>
 
           <div class="form-actions">
@@ -1722,6 +1701,13 @@ function clearSyncedAnonymousDraft(stockCode: StockCode) {
             <button v-else class="ghost-button" type="button" @click="openAuth('login')">登录后保存</button>
           </div>
         </div>
+        <details class="corporate-action-summary">
+          <summary>分红送转状态</summary>
+          <p :class="['status-text', { 'is-negative': dividendsError || dividendFreshness === 'fallback' }]">
+            {{ dividendStatusText }}
+          </p>
+          <strong>{{ corporateActionSummaryText }}</strong>
+        </details>
       </section>
 
       <ScenarioProjectionPanel
@@ -1744,15 +1730,14 @@ function clearSyncedAnonymousDraft(stockCode: StockCode) {
       <section class="panel notes-card">
         <div class="card-header">
           <div>
-            <p class="section-kicker">说明</p>
-            <h3>补充信息</h3>
+            <h3>计算说明</h3>
           </div>
         </div>
 
         <div class="notes-list">
           <article class="note-item">
             <strong>行情</strong>
-            <p>默认并行使用东方财富、腾讯和新浪行情；实时源异常时优先回退到最近成功缓存，最后才退内置值。</p>
+            <p>行情来自公开接口，可能存在延迟；实时数据不可用时会展示最近缓存或参考数据，请留意行情状态。</p>
           </article>
           <article class="note-item">
             <strong>口径</strong>
@@ -1768,7 +1753,7 @@ function clearSyncedAnonymousDraft(stockCode: StockCode) {
           </article>
           <article class="note-item">
             <strong>账号</strong>
-            <p>已接入轻量用户名体系；未登录输入会保存在当前浏览器，登录后可同步到账号下。密码不支持找回，请妥善保管。</p>
+            <p>未登录输入保存在当前浏览器，登录后可保存到你的账号。密码不支持找回，请妥善保管。</p>
           </article>
           <article class="note-item">
             <strong>免责</strong>

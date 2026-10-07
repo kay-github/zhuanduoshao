@@ -52,8 +52,8 @@ defineEmits<{
   <section class="panel scenario-card">
     <div class="card-header">
       <div>
-        <p class="section-kicker">市值推演</p>
-        <h3>{{ stockName }}</h3>
+        <h3>如果市值达到</h3>
+        <p class="status-text">{{ stockName }} · 可多选比较</p>
       </div>
     </div>
 
@@ -66,6 +66,7 @@ defineEmits<{
               <button
                 type="button"
                 :class="['scenario-mode-button', { 'is-active': customTargetMode === 'marketCap' }]"
+                :aria-pressed="customTargetMode === 'marketCap'"
                 @click="$emit('update:customTargetMode', 'marketCap')"
               >
                 按市值
@@ -73,6 +74,7 @@ defineEmits<{
               <button
                 type="button"
                 :class="['scenario-mode-button', { 'is-active': customTargetMode === 'price' }]"
+                :aria-pressed="customTargetMode === 'price'"
                 @click="$emit('update:customTargetMode', 'price')"
               >
                 按股价
@@ -86,6 +88,7 @@ defineEmits<{
               type="number"
               min="0"
               step="0.1"
+              aria-label="自定义目标市值"
               @input="$emit('update:customTarget', ($event.target as HTMLInputElement).value)"
             />
             <em>万亿</em>
@@ -97,6 +100,7 @@ defineEmits<{
               type="number"
               min="0"
               step="1"
+              aria-label="自定义目标股价"
               @input="$emit('update:customTargetPrice', ($event.target as HTMLInputElement).value)"
             />
             <em>元/股</em>
@@ -120,9 +124,10 @@ defineEmits<{
       </div>
     </div>
 
-    <div class="scenario-selector reverse-projection">
+    <details class="reverse-projection">
+      <summary>想赚多少？反向推演</summary>
       <div class="scenario-custom-input">
-        <span>反向推演：想赚多少</span>
+        <span>目标总收益</span>
         <div class="input-suffix scenario-input-suffix">
           <input
             :value="targetProfitWan"
@@ -130,6 +135,7 @@ defineEmits<{
             min="0"
             step="1"
             placeholder="输入目标总收益"
+            aria-label="目标总收益"
             @input="$emit('update:targetProfitWan', ($event.target as HTMLInputElement).value)"
           />
           <em>万元</em>
@@ -155,7 +161,7 @@ defineEmits<{
         </div>
         <p v-else class="status-text reverse-projection-note">{{ reverseProjection.message }}</p>
       </template>
-    </div>
+    </details>
 
     <div class="scenario-mobile-list">
       <article v-for="row in rows" :key="`${row.targetLabel}-mobile`" class="scenario-mobile-card">
@@ -164,9 +170,15 @@ defineEmits<{
             <span>目标市值</span>
             <strong>{{ row.targetLabel }}</strong>
           </div>
-          <span :class="['scenario-mobile-chip', profitClass(row.additionalProfit)]">
-            新增 {{ formatCurrency(row.additionalProfit) }}
+          <span :class="['scenario-distance', profitClass(row.distancePct)]">
+            距现价 {{ formatPercent(row.distancePct) }}
           </span>
+        </div>
+
+        <div class="scenario-result-hero">
+          <span>预计总收益</span>
+          <strong :class="profitClass(row.totalProfit)">{{ formatCurrency(row.totalProfit) }}</strong>
+          <p :class="profitClass(row.totalProfit)">总收益率 {{ formatPercent(row.totalProfitPct) }}</p>
         </div>
 
         <div class="scenario-mobile-main">
@@ -175,23 +187,15 @@ defineEmits<{
             <strong :class="profitClass(row.additionalProfit)">{{ formatCurrency(row.targetPrice) }}</strong>
           </article>
           <article>
-            <span>距离现价</span>
-            <strong :class="profitClass(row.distancePct)">{{ formatPercent(row.distancePct) }}</strong>
+            <span>从现在新增</span>
+            <strong :class="profitClass(row.additionalProfit)">{{ formatCurrency(row.additionalProfit) }}</strong>
           </article>
         </div>
 
         <div class="scenario-mobile-grid">
           <article>
-            <span>总收益率</span>
-            <strong :class="profitClass(row.totalProfit)">{{ formatPercent(row.totalProfitPct) }}</strong>
-          </article>
-          <article>
             <span>持仓市值</span>
             <strong>{{ formatCurrency(row.targetValue) }}</strong>
-          </article>
-          <article>
-            <span>总收益</span>
-            <strong :class="profitClass(row.totalProfit)">{{ formatCurrency(row.totalProfit) }}</strong>
           </article>
         </div>
 
@@ -208,7 +212,9 @@ defineEmits<{
 
     <p v-if="shareStatusText" class="status-text scenario-share-status">{{ shareStatusText }}</p>
 
-    <div class="table-wrap scenario-table">
+    <details class="scenario-table">
+      <summary>表格对比</summary>
+      <div class="table-wrap">
       <table>
         <thead>
           <tr>
@@ -244,6 +250,7 @@ defineEmits<{
           </tr>
         </tbody>
       </table>
-    </div>
+      </div>
+    </details>
   </section>
 </template>

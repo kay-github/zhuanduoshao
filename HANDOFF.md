@@ -1,8 +1,11 @@
 # HANDOFF
 
-Last updated: 2026-08-16
+Last updated: 2026-10-07
 
 ## Key Progress Memory
+
+- 2026-10-07 UI redesign: the user selected 极简留白 and requested black/white appearance switching. The existing Vue UI now uses a neutral palette, compact stock selectors, a prominent current-return headline, initially expanded position inputs, and quieter scenario results. Light/dark selection follows the system initially, restores before first paint, and persists independently of position drafts. Secondary corporate-action status, reverse projection, and comparison tables are expandable; all calculation, account, scenario, tax, and share capabilities remain. No backend/provider/schema changes were made. The user also explicitly authorized updating GitHub after verification; repository authentication was updated through the OS credential manager, with no credential added to project files.
+- 2026-10-07 UI exploration: `design/ui-directions.html` retains the three isolated interactive mockups (极简留白 / 轻盈蓝调 / 紧凑工作台) for design reference. They use labeled reference quotes and zero-share defaults, have no account writes, and are separate from the shipped application.
 
 - 2026-08-16 production alignment check: `https://xd.688680.xyz` returned 200 for the homepage, quotes, dividends, admin login, session restore, and logout. Quotes returned both stocks as `live` from Tencent, and corporate actions returned both stocks as `live` from Eastmoney.
 - 2026-08-16 auth maintenance: the production database contains exactly one `admin` account. Its password was rotated with the project's bcrypt helper and verified both against the stored hash and through the deployed login/session/logout flow. Plaintext credentials are intentionally not recorded in the repository.
@@ -25,7 +28,7 @@ Last updated: 2026-08-16
 Project name:
 - `赚多少`
 
-Current state (2026-08-16):
+Current state (2026-10-07):
 - Frontend `TypeScript + Vue 3 + Vite`, split into `AppHeader` / `QuotePanel` / `ScenarioProjectionPanel` components with pure calculation logic in `src/lib/portfolio-calculations.ts` (vitest-covered)
 - Backend `Vercel Functions + PostgreSQL + Drizzle`, quote/dividend services with multi-provider + snapshot fallback
 - New this round (all implemented, verified by `npm run check`):
@@ -51,7 +54,7 @@ Current state (2026-08-16):
 ### Frontend
 
 - Main page implemented in `src/App.vue`
-- Visual direction is a concise tool-style dark UI
+- Visual direction is the selected 极简留白 UI, with persistent light/dark appearance and mobile-first spacing
 - Mobile-first layout is in place
 - Product name corrected to `赚多少`
 - Stock area shows the 2 fixed stocks directly instead of a dropdown
@@ -172,6 +175,13 @@ Current positions rule:
 - Each position has a `basisDate` for automatic corporate-action adjustment
 
 ## Verified So Far
+
+2026-10-07 UI verification:
+- 20 test files / 140 tests passed; production build (frontend and server type checks) and `npm run db:check` passed.
+- Browser checks used the actual production build with isolated read-only fallback-data fixtures, without production account or database writes.
+- Verified zero-share defaults and China-calendar basis date; appearance changes survive reloads and preserve independent stock drafts. Checked price-mode custom targets, reverse projection, registration wording, and the detailed table with no document horizontal overflow at 320px/390px mobile and 1280px desktop viewports.
+- The share button dispatches the existing export flow. The in-app browser exposes native sharing and left its promise pending, so native share-sheet completion was not verified; renderer/export code is unchanged and share-data unit tests passed.
+- The latest production API/auth E2E remains the historical check recorded below; this redesign does not change those handlers.
 
 2026-08-16 production/workspace alignment:
 - `git fetch origin --prune` confirmed local `main` and `origin/main` were aligned before this documentation update.
@@ -319,6 +329,12 @@ Database files:
 - `drizzle/0003_colossal_ronan.sql`
 
 ## Recommended Next Steps
+
+### Selected UI Direction
+
+- 极简留白 is implemented in the existing Vue components and `src/style.css`; appearance logic is in `src/lib/theme.ts`, with startup restoration in `index.html`.
+- Keep `design/ui-directions.html` as an isolated design reference. It is a visualize fragment, viewable with that skill's `scripts/render.py --serve`, not a replacement application entry point.
+- Preserve the current calculation/session/draft/save protections and all existing capabilities when refining the UI further. The user authorized pushing verified updates to GitHub; do not record credentials in project files.
 
 ### Priority 1
 
