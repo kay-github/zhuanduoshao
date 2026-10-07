@@ -177,6 +177,7 @@ Current positions rule:
 ## Verified So Far
 
 2026-10-07 UI verification:
+- UI commit `74b4c0a` was pushed to `origin/main`; GitHub Actions run `37590549982` completed successfully. The production homepage at `https://xd.688680.xyz` returned 200 and includes the new appearance-restoration bootstrap, confirming that the GitHub update automatically reached production.
 - 20 test files / 140 tests passed; production build (frontend and server type checks) and `npm run db:check` passed.
 - Browser checks used the actual production build with isolated read-only fallback-data fixtures, without production account or database writes.
 - Verified zero-share defaults and China-calendar basis date; appearance changes survive reloads and preserve independent stock drafts. Checked price-mode custom targets, reverse projection, registration wording, and the detailed table with no document horizontal overflow at 320px/390px mobile and 1280px desktop viewports.
