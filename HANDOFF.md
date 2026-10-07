@@ -4,6 +4,7 @@ Last updated: 2026-10-07
 
 ## Key Progress Memory
 
+- 2026-10-07 light appearance refinement: after reviewing the minimal UI, the user requested less glare from large white areas. The light palette now uses a soft gray canvas, darker gray supporting surfaces, off-white inputs/selected controls, and a grouped return summary. Muted text and profit/loss colors were adjusted for contrast on the gray surfaces. Persistent light/dark switching remains available.
 - 2026-10-07 UI redesign: the user selected 极简留白 and requested black/white appearance switching. The existing Vue UI now uses a neutral palette, compact stock selectors, a prominent current-return headline, initially expanded position inputs, and quieter scenario results. Light/dark selection follows the system initially, restores before first paint, and persists independently of position drafts. Secondary corporate-action status, reverse projection, and comparison tables are expandable; all calculation, account, scenario, tax, and share capabilities remain. No backend/provider/schema changes were made. The user also explicitly authorized updating GitHub after verification; repository authentication was updated through the OS credential manager, with no credential added to project files.
 - 2026-10-07 UI exploration: `design/ui-directions.html` retains the three isolated interactive mockups (极简留白 / 轻盈蓝调 / 紧凑工作台) for design reference. They use labeled reference quotes and zero-share defaults, have no account writes, and are separate from the shipped application.
 
@@ -54,14 +55,14 @@ Current state (2026-10-07):
 ### Frontend
 
 - Main page implemented in `src/App.vue`
-- Visual direction is the selected 极简留白 UI, with persistent light/dark appearance and mobile-first spacing
+- Visual direction is the selected 极简留白 UI, refined with a soft gray light canvas to reduce large white areas, persistent light/dark appearance, and mobile-first spacing
 - Mobile-first layout is in place
 - Product name corrected to `赚多少`
 - Stock area shows the 2 fixed stocks directly instead of a dropdown
 - Current selected stock can be switched by clicking stock cards
 - Target market-cap input uses `万亿元`; display now switches automatically between `亿元` and `万亿元`
 - Quote card title is shortened to `行情`, and the old top-left stock kicker was removed
-- Quote cards now stack one per row instead of two side by side
+- Quote selection uses two compact stock buttons; one quote detail area shows the selected stock
 - Latest price and gain/loss percentage now both use gain/loss color
 - Mobile scenario cards were redesigned to emphasize target market cap, target price, distance from current price, total return rate, holding value, and total return without crowding the card
 - Quote update time is shown once in the stock section header
@@ -175,6 +176,11 @@ Current positions rule:
 - Each position has a `basisDate` for automatic corporate-action adjustment
 
 ## Verified So Far
+
+2026-10-07 soft light appearance verification:
+- `npm run build` passed after the palette refinement, including frontend/server type checks. This follow-up changes only CSS and product/handoff documentation.
+- Browser checks of the production assets confirmed no document horizontal overflow at 320px/390px and 1280px; light/dark switching and reload preserved the existing isolated fixture drafts, with no console warnings/errors.
+- Muted text, profit/loss colors, and links meet at least 4.5:1 contrast against their page/supporting backgrounds in both appearances; the lowest checked light contrast is 4.73:1 for muted text on the gray surface.
 
 2026-10-07 UI verification:
 - UI commit `74b4c0a` was pushed to `origin/main`; GitHub Actions run `37590549982` completed successfully. The production homepage at `https://xd.688680.xyz` returned 200 and includes the new appearance-restoration bootstrap, confirming that the GitHub update automatically reached production.

@@ -128,6 +128,7 @@ Default target total market cap list in MVP:
 - Keep changes minimal and pragmatic.
 - Keep the UI concise and tool-first; avoid unnecessary marketing copy in primary screens.
 - Visual direction is minimal black/white/gray, with current total return as the primary number and compact stock selectors. Keep profit/loss colors readable in both appearances.
+- Light appearance uses a soft neutral gray canvas and restrained off-white inputs, with tonal grouping for the return summary; avoid large pure-white areas and retain readable text contrast.
 - Support light/dark appearance. First visit follows the system preference; an explicit choice is stored independently in `zhuanduoshao_theme` and must not reset position drafts or authentication state. Restore it before first paint.
 - The position editor is initially expanded; secondary corporate-action status, reverse projection, and the detailed comparison table may be collapsed while remaining accessible.
 - Treat mobile as the primary layout; after mobile UI changes, verify around 390px width and check that the document has no horizontal overflow.
